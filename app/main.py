@@ -3,8 +3,11 @@ AI Logistics Assistant - Feature 1: Basic Chat
 A stateless AI chatbot with logistics domain expertise.
 """
 import httpx
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.models import ChatRequest, ChatResponse
 from app.llm_client import llm_client
 from app.config import settings
@@ -23,6 +26,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Get UI directory path
+UI_DIR = Path(__file__).parent.parent / "ui"
+
+# Mount static files if UI directory exists
+if UI_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
 
 
 # System prompt for logistics domain
@@ -44,7 +54,22 @@ Keep responses concise but comprehensive."""
 
 @app.get("/")
 async def root():
-    """Health check endpoint."""
+    """Serve the web UI."""
+    ui_file = UI_DIR / "index.html"
+    if ui_file.exists():
+        return FileResponse(ui_file)
+    return {
+        "status": "online",
+        "app": settings.app_name,
+        "version": "0.1.0",
+        "features": ["basic_chat"],
+        "model": llm_client.model
+    }
+
+
+@app.get("/api/status")
+async def status():
+    """API status endpoint."""
     return {
         "status": "online",
         "app": settings.app_name,
