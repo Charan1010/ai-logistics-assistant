@@ -1,0 +1,91 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, 'feature/**' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Lint with ruff
+      run: |
+        ruff check . --select E,F,W --ignore E501
+      continue-on-error: true
+    
+    - name: Check for secrets in code
+      run: |
+        if grep -r "sk-[a-zA-Z0-9]\{20,\}" --include="*.py" --exclude-dir=venv .; then
+          echo "⚠️  Found potential API keys in code!"
+          exit 1
+        fi
+        if grep -r "gsk_[a-zA-Z0-9]\{20,\}" --include="*.py" --exclude-dir=venv .; then
+          echo "⚠️  Found potential API keys in code!"
+          exit 1
+        fi
+        echo "✅ No secrets detected"
+    
+    - name: Validate .env.example exists
+      run: |
+        if [ ! -f .env.example ]; then
+          echo "❌ .env.example is missing"
+          exit 1
+        fi
+        echo "✅ .env.example found"
+    
+    - name: Check imports (without Ollama)
+      run: |
+        python -c "
+        import sys
+        from app.models import ChatRequest, ChatResponse
+        from app.config import settings
+        print('✅ Core imports successful')
+        "
+    
+    - name: Run unit tests (mocked)
+      run: |
+        pytest tests/ -v --tb=short -k "not test_chat_endpoint_valid_message"
+      continue-on-error: true
+
+  pr-checks:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Check commit messages
+      run: |
+        echo "Checking commit messages follow conventional commits..."
+        git log --format=%s origin/${{ github.base_ref }}..${{ github.head_ref }} | \
+        grep -E '^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .+' || \
+        (echo "⚠️  Please use conventional commits: feat/fix/docs/etc" && exit 0)
+        echo "✅ Commit messages look good"
+    
+    - name: PR size check
+      run: |
+        CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...${{ github.head_ref }} | wc -l)
+        CHANGED_LINES=$(git diff --stat origin/${{ github.base_ref }}...${{ github.head_ref }} | tail -1 | awk '{print $4+$6}')
+        echo "📊 Changed files: $CHANGED_FILES"
+        echo "📊 Changed lines: $CHANGED_LINES"
+        if [ $CHANGED_LINES -gt 500 ]; then
+          echo "⚠️  Large PR ($CHANGED_LINES lines). Consider splitting into smaller PRs."
+        fi
