@@ -58,10 +58,13 @@ jobs:
         print('✅ Core imports successful')
         "
     
-    - name: Run unit tests (mocked)
+    - name: Run unit tests
       run: |
-        pytest tests/ -v --tb=short -k "not test_chat_endpoint_valid_message"
-      continue-on-error: true
+        pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
+    
+    - name: Test coverage check
+      run: |
+        pytest tests/ --cov=app --cov-fail-under=70
 
   pr-checks:
     runs-on: ubuntu-latest
