@@ -25,6 +25,7 @@ def test_api_status_endpoint():
     assert data["status"] == "online"
     assert data["app"] == "AI Logistics Assistant"
     assert "basic_chat" in data["features"]
+    assert "structured_output" in data["features"]
     assert "model" in data
 
 
@@ -96,3 +97,44 @@ def test_chat_endpoint_long_message(mock_chat):
     assert response.status_code == 200
     data = response.json()
     assert "response" in data
+
+
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_structured_chat_endpoint_valid_json(mock_chat):
+    """Structured endpoint should return parsed JSON from the model."""
+    mock_chat.return_value = (
+        '{"summary":"Inventory is stable.",'
+        '"key_points":["Fill rate is 98%","Backorders are low"],'
+        '"recommendations":["Increase safety stock for SKU-19"],'
+        '"risks":["Supplier lead-time volatility"],'
+        '"confidence":0.86}'
+    )
+
+    response = client.post(
+        "/api/chat/structured",
+        json={"message": "Give me a logistics status summary"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model"]
+    assert data["output"]["summary"] == "Inventory is stable."
+    assert data["output"]["confidence"] == 0.86
+    assert "Fill rate is 98%" in data["output"]["key_points"]
+
+
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_structured_chat_endpoint_fallback_on_invalid_json(mock_chat):
+    """Structured endpoint should provide fallback output when model format is invalid."""
+    mock_chat.return_value = "Here is your answer in plain text without JSON."
+
+    response = client.post(
+        "/api/chat/structured",
+        json={"message": "Summarize delivery risk"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["output"]["summary"]
+    assert data["output"]["confidence"] == 0.4
+    assert "Response format mismatch from model" in data["output"]["risks"]

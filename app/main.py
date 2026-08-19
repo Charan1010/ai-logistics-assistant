@@ -3,12 +3,19 @@ AI Logistics Assistant - Feature 1: Basic Chat
 A stateless AI chatbot with logistics domain expertise.
 """
 import httpx
+import json
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.models import ChatRequest, ChatResponse
+from app.models import (
+    ChatRequest,
+    ChatResponse,
+    StructuredAnswer,
+    StructuredChatRequest,
+    StructuredChatResponse,
+)
 from app.llm_client import llm_client
 from app.config import settings
 
@@ -52,6 +59,62 @@ Respond in a professional, executive-level tone. Provide actionable insights wit
 Keep responses concise but comprehensive."""
 
 
+STRUCTURED_OUTPUT_PROMPT = """You are an expert AI assistant for logistics and supply chain operations.
+
+Return ONLY valid JSON with this exact schema:
+{
+  "summary": "string",
+  "key_points": ["string", "string"],
+  "recommendations": ["string", "string"],
+  "risks": ["string", "string"],
+  "confidence": 0.0
+}
+
+Rules:
+- No markdown.
+- No extra keys.
+- confidence must be between 0 and 1.
+- Keep key_points/recommendations/risks concise and actionable.
+"""
+
+
+def _extract_json_object(raw_text: str) -> dict:
+    """Extract and parse the first JSON object from model output."""
+    text = raw_text.strip()
+
+    # Fast path when response is already plain JSON.
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No JSON object found in model response")
+
+    candidate = text[start : end + 1]
+    parsed = json.loads(candidate)
+    if not isinstance(parsed, dict):
+        raise ValueError("Structured output is not a JSON object")
+    return parsed
+
+
+def _fallback_structured_answer(raw_text: str) -> StructuredAnswer:
+    """Return a safe structured fallback when strict JSON parsing fails."""
+    cleaned = raw_text.strip()
+    short = cleaned[:500] if cleaned else "Unable to parse structured output from model response."
+    return StructuredAnswer(
+        summary=short,
+        key_points=[],
+        recommendations=[],
+        risks=["Response format mismatch from model"],
+        confidence=0.4,
+    )
+
+
 @app.get("/")
 async def root():
     """Serve the web UI."""
@@ -74,7 +137,7 @@ async def status():
         "status": "online",
         "app": settings.app_name,
         "version": "0.1.0",
-        "features": ["basic_chat"],
+        "features": ["basic_chat", "structured_output"],
         "model": llm_client.model
     }
 
@@ -101,6 +164,37 @@ async def chat(request: ChatRequest):
             model=llm_client.model
         )
     
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM service unavailable: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@app.post("/api/chat/structured", response_model=StructuredChatResponse)
+async def chat_structured(request: StructuredChatRequest):
+    """Structured chat endpoint that returns schema-validated JSON output."""
+    try:
+        messages = [
+            {"role": "system", "content": STRUCTURED_OUTPUT_PROMPT},
+            {"role": "user", "content": request.message},
+        ]
+
+        response_text = await llm_client.chat(messages)
+
+        try:
+            payload = _extract_json_object(response_text)
+            structured = StructuredAnswer.model_validate(payload)
+        except Exception:
+            structured = _fallback_structured_answer(response_text)
+
+        return StructuredChatResponse(output=structured, model=llm_client.model)
+
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=503,

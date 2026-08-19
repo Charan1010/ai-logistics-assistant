@@ -69,19 +69,18 @@ curl -X POST http://localhost:8000/api/chat \
   -d '{"message": "What are best practices for last-mile delivery?"}'
 ```
 
-## 🎯 Next Steps - Feature 2: Session Memory
+## 🎯 Next Steps - Feature 3: Conversation History
 
 **What you'll add next:**
-- Session-based conversations (AI remembers context)
-- UUID-based session IDs
-- Multi-turn conversations
-- Session history retrieval
+- Session and conversation history retrieval
+- Session listing and lifecycle endpoints
+- Context inspection for debugging multi-turn behavior
 
 **Git Workflow:**
-1. Create feature branch: `git checkout -b feature/session-memory`
+1. Create feature branch: `git checkout -b feature/conversation-history`
 2. Add session store module
-3. Modify chat endpoint to accept session_id
-4. Add new endpoints: create session, list sessions, get history
+3. Add endpoints: create session, list sessions, get history
+4. Add history query filtering and retention limits
 5. Test thoroughly
 6. Commit with conventional commit message
 7. Push to GitHub: `git push -u origin feature/session-memory`
@@ -94,7 +93,7 @@ curl -X POST http://localhost:8000/api/chat \
 - [x] **Feature 1: Basic Chat** ← YOU ARE HERE
 
 ### Phase 2: Memory (Next 2 Features)
-- [ ] **Feature 2: Session Memory** - Multi-turn conversations
+- [x] **Feature 2: Structured Output** - Schema-validated JSON output
 - [ ] **Feature 3: Conversation History** - Session management
 
 ### Phase 3: Knowledge (RAG)
@@ -208,7 +207,7 @@ You need to:
 
 ---
 
-**Current Status**: Feature 1 Complete ✅ | Next: Feature 2 (Session Memory)
+**Current Status**: Feature 2 Complete ✅ (Structured Output) | Next: Feature 3 (Conversation History)
 
 **Project Location**: `C:\Users\6764325\ai-logistics-assistant`
 
