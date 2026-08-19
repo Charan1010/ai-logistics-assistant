@@ -5,8 +5,17 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from app.main import app
+from app.session_store import session_store
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def clear_sessions():
+    """Clear all sessions before each test."""
+    session_store.clear_all()
+    yield
+    session_store.clear_all()
 
 
 def test_root_endpoint_returns_ui():
@@ -138,3 +147,192 @@ def test_structured_chat_endpoint_fallback_on_invalid_json(mock_chat):
     assert data["output"]["summary"]
     assert data["output"]["confidence"] == 0.4
     assert "Response format mismatch from model" in data["output"]["risks"]
+
+
+# Feature 3: Conversation History Tests
+
+def test_create_session():
+    """Test creating a new session."""
+    response = client.post("/api/sessions", json={})
+    
+    assert response.status_code == 201
+    data = response.json()
+    assert "session_id" in data
+    assert data["message_count"] == 0
+    assert "created_at" in data
+    assert "updated_at" in data
+
+
+def test_create_session_with_metadata():
+    """Test creating a session with metadata."""
+    response = client.post(
+        "/api/sessions",
+        json={"metadata": {"user": "test_user", "department": "logistics"}}
+    )
+    
+    assert response.status_code == 201
+    data = response.json()
+    assert data["metadata"]["user"] == "test_user"
+    assert data["metadata"]["department"] == "logistics"
+
+
+def test_list_sessions():
+    """Test listing all sessions."""
+    # Create a few sessions
+    client.post("/api/sessions", json={})
+    client.post("/api/sessions", json={})
+    
+    response = client.get("/api/sessions")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert len(data["sessions"]) == 2
+
+
+def test_get_session():
+    """Test getting session details."""
+    # Create a session
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    
+    # Get session details
+    response = client.get(f"/api/sessions/{session_id}")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"] == session_id
+    assert data["message_count"] == 0
+
+
+def test_get_nonexistent_session():
+    """Test getting a session that doesn't exist."""
+    response = client.get("/api/sessions/nonexistent-id")
+    assert response.status_code == 404
+
+
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_chat_with_session(mock_chat):
+    """Test chat endpoint with session support."""
+    mock_chat.return_value = "Delivery times depend on several factors..."
+    
+    # Create a session
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    
+    # Send a message with session
+    response = client.post(
+        "/api/chat",
+        json={"message": "What affects delivery times?", "session_id": session_id}
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "response" in data
+    
+    # Verify message was stored in session
+    history_response = client.get(f"/api/sessions/{session_id}/history")
+    history = history_response.json()
+    assert history["total"] == 2  # user message + assistant response
+    assert history["messages"][0]["role"] == "user"
+    assert history["messages"][1]["role"] == "assistant"
+
+
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_multi_turn_conversation(mock_chat):
+    """Test multi-turn conversation with session."""
+    mock_chat.side_effect = [
+        "First response",
+        "Second response that references context"
+    ]
+    
+    # Create session
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    
+    # First message
+    client.post(
+        "/api/chat",
+        json={"message": "What are KPIs?", "session_id": session_id}
+    )
+    
+    # Second message (should have context from first)
+    client.post(
+        "/api/chat",
+        json={"message": "Give me examples", "session_id": session_id}
+    )
+    
+    # Verify both exchanges are in history
+    history_response = client.get(f"/api/sessions/{session_id}/history")
+    history = history_response.json()
+    assert history["total"] == 4  # 2 user + 2 assistant messages
+
+
+def test_chat_with_nonexistent_session():
+    """Test chat with invalid session ID."""
+    response = client.post(
+        "/api/chat",
+        json={"message": "Test", "session_id": "nonexistent"}
+    )
+    assert response.status_code == 404
+
+
+def test_get_session_history():
+    """Test getting conversation history."""
+    # Create session and add messages
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    
+    # Manually add some messages to session for testing
+    from app.session_store import session_store
+    session_store.add_message(session_id, "user", "Hello")
+    session_store.add_message(session_id, "assistant", "Hi there!")
+    
+    # Get history
+    response = client.get(f"/api/sessions/{session_id}/history")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["messages"][0]["content"] == "Hello"
+    assert data["messages"][1]["content"] == "Hi there!"
+
+
+def test_get_history_with_limit():
+    """Test getting limited conversation history."""
+    # Create session
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    
+    # Add multiple messages
+    from app.session_store import session_store
+    for i in range(5):
+        session_store.add_message(session_id, "user", f"Message {i}")
+    
+    # Get limited history
+    response = client.get(f"/api/sessions/{session_id}/history?limit=2")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2  # Only last 2 messages
+
+
+def test_delete_session():
+    """Test deleting a session."""
+    # Create session
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    
+    # Delete it
+    response = client.delete(f"/api/sessions/{session_id}")
+    assert response.status_code == 204
+    
+    # Verify it's gone
+    get_response = client.get(f"/api/sessions/{session_id}")
+    assert get_response.status_code == 404
+
+
+def test_delete_nonexistent_session():
+    """Test deleting a session that doesn't exist."""
+    response = client.delete("/api/sessions/nonexistent")
+    assert response.status_code == 404

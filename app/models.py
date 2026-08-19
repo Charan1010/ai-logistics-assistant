@@ -1,12 +1,15 @@
 """
 Pydantic models for API requests and responses.
 """
+from datetime import datetime
+from typing import Optional, List
 from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
     message: str = Field(..., min_length=1, description="User's message to the assistant")
+    session_id: Optional[str] = Field(None, description="Optional session ID for conversation history")
 
 
 class ChatResponse(BaseModel):
@@ -33,3 +36,39 @@ class StructuredChatResponse(BaseModel):
     """API response model for structured chat endpoint."""
     output: StructuredAnswer
     model: str = Field(..., description="LLM model used for generation")
+
+
+# Session Management Models
+
+class SessionCreate(BaseModel):
+    """Request to create a new session."""
+    metadata: Optional[dict] = Field(default_factory=dict, description="Optional metadata for the session")
+
+
+class MessageResponse(BaseModel):
+    """A message in conversation history."""
+    role: str
+    content: str
+    timestamp: datetime
+
+
+class SessionResponse(BaseModel):
+    """Response model for session details."""
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+    metadata: dict
+
+
+class SessionListResponse(BaseModel):
+    """Response model for listing sessions."""
+    sessions: List[SessionResponse]
+    total: int
+
+
+class HistoryResponse(BaseModel):
+    """Response model for conversation history."""
+    session_id: str
+    messages: List[MessageResponse]
+    total: int

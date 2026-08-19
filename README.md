@@ -15,9 +15,9 @@ Executive-level AI assistant that understands logistics operations, provides rea
   - Typing indicators and smooth animations
   - Example queries for quick start
 
-### Phase 2: Memory (In Progress)
+### Phase 2: Memory ✅
 - [x] **Feature 2: Structured Output** - Schema-validated JSON answers for reliable downstream use
-- [ ] **Feature 3: Conversation History** - Session management and retrieval
+- [x] **Feature 3: Conversation History** - Session management and multi-turn conversations
 
 ### Phase 3: Knowledge (Planned)
 - [ ] **Feature 4: Document Ingestion** - RAG pipeline for company documents
@@ -100,6 +100,19 @@ curl -X POST http://localhost:8000/api/chat \
 curl -X POST http://localhost:8000/api/chat/structured \
   -H "Content-Type: application/json" \
   -d '{"message": "Summarize current logistics performance and risks"}'
+
+# Create a conversation session
+curl -X POST http://localhost:8000/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Chat with session (multi-turn conversation)
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What are supply chain KPIs?", "session_id": "<session-id>"}'
+
+# Get conversation history
+curl http://localhost:8000/api/sessions/<session-id>/history
 ```
 
 Structured response shape:
@@ -165,4 +178,4 @@ Built as part of AI Engineering learning journey focusing on:
 
 ---
 
-**Current Status**: Feature 2 Complete ✅ (Structured Output) | Next: Feature 3 (Conversation History)
+**Current Status**: Phase 2 Complete ✅ (Memory & Sessions) | Next: Phase 3 (Knowledge/RAG)
