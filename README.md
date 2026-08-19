@@ -16,7 +16,7 @@ Executive-level AI assistant that understands logistics operations, provides rea
   - Example queries for quick start
 
 ### Phase 2: Memory (In Progress)
-- [ ] **Feature 2: Session Memory** - Multi-turn conversations with context retention
+- [x] **Feature 2: Structured Output** - Schema-validated JSON answers for reliable downstream use
 - [ ] **Feature 3: Conversation History** - Session management and retrieval
 
 ### Phase 3: Knowledge (Planned)
@@ -95,6 +95,26 @@ uvicorn app.main:app --reload --port 8000
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "What are the key metrics for supply chain efficiency?"}'
+
+# Structured output endpoint
+curl -X POST http://localhost:8000/api/chat/structured \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Summarize current logistics performance and risks"}'
+```
+
+Structured response shape:
+
+```json
+{
+  "output": {
+    "summary": "...",
+    "key_points": ["..."],
+    "recommendations": ["..."],
+    "risks": ["..."],
+    "confidence": 0.0
+  },
+  "model": "qwen2.5:3b"
+}
 ```
 
 ## 🧪 Testing
@@ -145,4 +165,4 @@ Built as part of AI Engineering learning journey focusing on:
 
 ---
 
-**Current Status**: Feature 1 Complete ✅ | Next: Feature 2 (Session Memory)
+**Current Status**: Feature 2 Complete ✅ (Structured Output) | Next: Feature 3 (Conversation History)
