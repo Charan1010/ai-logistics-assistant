@@ -81,6 +81,86 @@
             background: rgba(255,255,255,0.4);
         }
 
+        .sessions-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .sessions-btn {
+            background: rgba(255,255,255,0.3);
+            border: 1px solid rgba(255,255,255,0.5);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .sessions-btn:hover {
+            background: rgba(255,255,255,0.4);
+        }
+
+        .sessions-list {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 8px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            min-width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 1000;
+        }
+
+        .sessions-list.show {
+            display: block;
+        }
+
+        .session-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .session-item:hover {
+            background: #f8fafc;
+        }
+
+        .session-item.active {
+            background: #ede9fe;
+            border-left: 3px solid #667eea;
+        }
+
+        .session-item-id {
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .session-item-info {
+            font-size: 11px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+
+        .session-item-time {
+            font-size: 10px;
+            color: #94a3b8;
+        }
+
+        .no-sessions {
+            padding: 20px;
+            text-align: center;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+
         .status {
             display: flex;
             align-items: center;
@@ -313,6 +393,12 @@
             <div class="session-controls">
                 <span>Session: <span class="session-id" id="sessionId">Creating...</span></span>
                 <button class="new-session-btn" onclick="createNewSession()">🔄 New Session</button>
+                <div class="sessions-dropdown">
+                    <button class="sessions-btn" onclick="toggleSessionsList()">📋 Sessions</button>
+                    <div class="sessions-list" id="sessionsList">
+                        <div class="no-sessions">Loading sessions...</div>
+                    </div>
+                </div>
             </div>
             <div class="status">
                 <div class="status-dot"></div>
@@ -426,7 +512,103 @@
             
             // Create new session
             await createSession();
+            await loadSessionsList();
         }
+
+        async function loadSessionsList() {
+            try {
+                const response = await fetch(`${API_URL}/api/sessions`);
+                const data = await response.json();
+                
+                const listContainer = document.getElementById('sessionsList');
+                
+                if (data.sessions.length === 0) {
+                    listContainer.innerHTML = '<div class="no-sessions">No sessions yet</div>';
+                    return;
+                }
+                
+                listContainer.innerHTML = data.sessions
+                    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+                    .map(session => {
+                        const shortId = session.session_id.substring(0, 8);
+                        const isActive = session.session_id === currentSessionId;
+                        const time = new Date(session.updated_at).toLocaleString();
+                        
+                        return `
+                            <div class="session-item ${isActive ? 'active' : ''}" 
+                                 onclick="switchToSession('${session.session_id}')"
+                                 title="${session.session_id}">
+                                <div class="session-item-id">${shortId}...</div>
+                                <div class="session-item-info">
+                                    ${session.message_count} messages
+                                </div>
+                                <div class="session-item-time">${time}</div>
+                            </div>
+                        `;
+                    }).join('');
+                    
+            } catch (error) {
+                console.error('Error loading sessions:', error);
+            }
+        }
+
+        async function switchToSession(sessionId) {
+            if (sessionId === currentSessionId) {
+                // Just close the dropdown if clicking current session
+                document.getElementById('sessionsList').classList.remove('show');
+                return;
+            }
+            
+            try {
+                // Load session history
+                const response = await fetch(`${API_URL}/api/sessions/${sessionId}/history`);
+                const data = await response.json();
+                
+                // Clear current chat
+                const chatContainer = document.getElementById('chatContainer');
+                chatContainer.innerHTML = '';
+                messageCount = 0;
+                
+                // Load all messages from history
+                data.messages.forEach(msg => {
+                    addMessage(msg.content, msg.role === 'user');
+                });
+                
+                // Update current session
+                currentSessionId = sessionId;
+                const shortId = sessionId.substring(0, 8);
+                document.getElementById('sessionId').textContent = shortId + '...';
+                document.getElementById('sessionId').title = sessionId;
+                
+                // Refresh sessions list to update active marker
+                await loadSessionsList();
+                
+                // Close dropdown
+                document.getElementById('sessionsList').classList.remove('show');
+                
+            } catch (error) {
+                console.error('Error switching session:', error);
+                alert('Failed to load session history');
+            }
+        }
+
+        function toggleSessionsList() {
+            const list = document.getElementById('sessionsList');
+            if (list.classList.contains('show')) {
+                list.classList.remove('show');
+            } else {
+                loadSessionsList();
+                list.classList.add('show');
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.querySelector('.sessions-dropdown');
+            if (dropdown && !dropdown.contains(event.target)) {
+                document.getElementById('sessionsList').classList.remove('show');
+            }
+        });
 
         async function checkServerStatus() {
             try {
@@ -518,6 +700,11 @@
                 hideTyping();
                 addMessage(data.response, false);
                 
+                // Update sessions list (message count changed)
+                if (document.getElementById('sessionsList').classList.contains('show')) {
+                    await loadSessionsList();
+                }
+                
             } catch (error) {
                 hideTyping();
                 addMessage('Sorry, I encountered an error. Please make sure the server is running.', false);
@@ -544,8 +731,8 @@
         // Check server status on load
         checkServerStatus();
         
-        // Create initial session
-        createSession();
+        // Create initial session and load sessions list
+        createSession().then(() => loadSessionsList());
         
         // Focus input on load
         document.getElementById('messageInput').focus();
