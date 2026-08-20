@@ -69,18 +69,19 @@ curl -X POST http://localhost:8000/api/chat \
   -d '{"message": "What are best practices for last-mile delivery?"}'
 ```
 
-## 🎯 Next Steps - Feature 3: Conversation History
+## 🎯 Next Steps - Feature 4: Document Ingestion
 
 **What you'll add next:**
-- Session and conversation history retrieval
-- Session listing and lifecycle endpoints
-- Context inspection for debugging multi-turn behavior
+- Document upload and parsing
+- ChromaDB vector store setup
+- Text chunking and embedding generation
+- Document management endpoints
 
 **Git Workflow:**
-1. Create feature branch: `git checkout -b feature/conversation-history`
-2. Add session store module
-3. Add endpoints: create session, list sessions, get history
-4. Add history query filtering and retention limits
+1. Create feature branch: `git checkout -b feature/document-ingestion`
+2. Add document parsing utilities
+3. Set up ChromaDB vector store
+4. Add document upload and management endpoints
 5. Test thoroughly
 6. Commit with conventional commit message
 7. Push to GitHub: `git push -u origin feature/session-memory`
@@ -92,9 +93,9 @@ curl -X POST http://localhost:8000/api/chat \
 ### Phase 1: Foundation ✅
 - [x] **Feature 1: Basic Chat** ← YOU ARE HERE
 
-### Phase 2: Memory (Next 2 Features)
+### Phase 2: Memory ✅ COMPLETE
 - [x] **Feature 2: Structured Output** - Schema-validated JSON output
-- [ ] **Feature 3: Conversation History** - Session management
+- [x] **Feature 3: Conversation History** - Session management
 
 ### Phase 3: Knowledge (RAG)
 - [ ] **Feature 4: Document Ingestion** - ChromaDB vector store
@@ -207,7 +208,7 @@ You need to:
 
 ---
 
-**Current Status**: Feature 2 Complete ✅ (Structured Output) | Next: Feature 3 (Conversation History)
+**Current Status**: Phase 2 Complete ✅ (Memory & Sessions) | Next: Phase 3 (Knowledge/RAG)
 
 **Project Location**: `C:\Users\6764325\ai-logistics-assistant`
 
