@@ -4,9 +4,11 @@ A stateless AI chatbot with logistics domain expertise.
 """
 import httpx
 import json
+import uuid
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -21,10 +23,19 @@ from app.models import (
     SessionListResponse,
     HistoryResponse,
     MessageResponse,
+    DocumentUploadResponse,
+    DocumentResponse,
+    DocumentListResponse,
+    ChunkResponse,
+    DocumentChunksResponse,
+    VectorStoreStatsResponse,
 )
 from app.llm_client import llm_client
 from app.config import settings
 from app.session_store import session_store
+from app.document_processor import get_document_processor
+from app.embeddings import get_embedding_model
+from app.vector_store import get_vector_store
 
 app = FastAPI(
     title=settings.app_name,
@@ -144,7 +155,7 @@ async def status():
         "status": "online",
         "app": settings.app_name,
         "version": "0.1.0",
-        "features": ["basic_chat", "structured_output", "conversation_history"],
+        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion"],
         "model": llm_client.model
     }
 
@@ -314,6 +325,226 @@ async def delete_session(session_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return None
+
+
+# Document Management Endpoints
+
+# Create upload directory
+UPLOAD_DIR = Path("./data/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Supported file types
+SUPPORTED_FILE_TYPES = {
+    "application/pdf": "pdf",
+    "text/plain": "txt",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+}
+
+
+@app.post("/api/documents/upload", response_model=DocumentUploadResponse, status_code=201)
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Upload and process a document.
+    
+    Supported formats: PDF, TXT, DOCX
+    """
+    try:
+        # Validate file type
+        if file.content_type not in SUPPORTED_FILE_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type. Supported: PDF, TXT, DOCX"
+            )
+        
+        file_type = SUPPORTED_FILE_TYPES[file.content_type]
+        
+        # Generate unique document ID
+        document_id = str(uuid.uuid4())
+        
+        # Save uploaded file temporarily
+        file_path = UPLOAD_DIR / f"{document_id}_{file.filename}"
+        content = await file.read()
+        file_size = len(content)
+        
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        # Parse document
+        doc_processor = get_document_processor()
+        text = doc_processor.parse_file(file_path, file_type)
+        
+        if not text or len(text.strip()) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Document is empty or could not be parsed"
+            )
+        
+        # Chunk document
+        metadata = {
+            "filename": file.filename,
+            "file_type": file_type,
+            "file_size": file_size,
+        }
+        chunks = doc_processor.chunk_text(text, metadata=metadata)
+        
+        # Generate embeddings
+        embedding_model = get_embedding_model()
+        chunk_texts = [chunk.text for chunk in chunks]
+        embeddings = embedding_model.embed_batch(chunk_texts)
+        
+        # Store in vector database
+        vector_store = get_vector_store()
+        chunks_added = vector_store.add_document(
+            document_id=document_id,
+            filename=file.filename,
+            chunks=chunk_texts,
+            embeddings=embeddings,
+            metadata=metadata
+        )
+        
+        return DocumentUploadResponse(
+            document_id=document_id,
+            filename=file.filename,
+            file_type=file_type,
+            file_size=file_size,
+            chunks_created=chunks_added,
+            upload_date=datetime.now()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing document: {str(e)}"
+        )
+
+
+@app.get("/api/documents", response_model=DocumentListResponse)
+async def list_documents():
+    """List all uploaded documents."""
+    try:
+        vector_store = get_vector_store()
+        documents = vector_store.list_documents()
+        
+        return DocumentListResponse(
+            documents=[
+                DocumentResponse(
+                    document_id=doc["document_id"],
+                    filename=doc["filename"],
+                    upload_date=doc["upload_date"],
+                    total_chunks=doc["total_chunks"]
+                )
+                for doc in documents
+            ],
+            total=len(documents)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error listing documents: {str(e)}"
+        )
+
+
+@app.get("/api/documents/stats", response_model=VectorStoreStatsResponse)
+async def get_vector_store_stats():
+    """Get vector store statistics."""
+    try:
+        vector_store = get_vector_store()
+        stats = vector_store.get_stats()
+        
+        return VectorStoreStatsResponse(
+            total_documents=stats["total_documents"],
+            total_chunks=stats["total_chunks"],
+            collection_name=stats["collection_name"]
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving stats: {str(e)}"
+        )
+
+
+@app.get("/api/documents/{document_id}", response_model=DocumentResponse)
+async def get_document(document_id: str):
+    """Get details for a specific document."""
+    try:
+        vector_store = get_vector_store()
+        documents = vector_store.list_documents()
+        
+        doc = next((d for d in documents if d["document_id"] == document_id), None)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        return DocumentResponse(
+            document_id=doc["document_id"],
+            filename=doc["filename"],
+            upload_date=doc["upload_date"],
+            total_chunks=doc["total_chunks"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving document: {str(e)}"
+        )
+
+
+@app.get("/api/documents/{document_id}/chunks", response_model=DocumentChunksResponse)
+async def get_document_chunks(document_id: str):
+    """Get all chunks for a specific document."""
+    try:
+        vector_store = get_vector_store()
+        chunks = vector_store.get_document_chunks(document_id)
+        
+        if not chunks:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        return DocumentChunksResponse(
+            document_id=document_id,
+            chunks=[
+                ChunkResponse(
+                    chunk_id=chunk["id"],
+                    text=chunk["text"],
+                    chunk_index=chunk["metadata"].get("chunk_index", 0),
+                    metadata=chunk["metadata"]
+                )
+                for chunk in chunks
+            ],
+            total=len(chunks)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving chunks: {str(e)}"
+        )
+
+
+@app.delete("/api/documents/{document_id}", status_code=204)
+async def delete_document(document_id: str):
+    """Delete a document and all its chunks."""
+    try:
+        vector_store = get_vector_store()
+        chunks_deleted = vector_store.delete_document(document_id)
+        
+        if chunks_deleted == 0:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Clean up uploaded file if it exists
+        for file in UPLOAD_DIR.glob(f"{document_id}_*"):
+            file.unlink()
+        
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting document: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

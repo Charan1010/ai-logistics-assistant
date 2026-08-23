@@ -72,3 +72,51 @@ class HistoryResponse(BaseModel):
     session_id: str
     messages: List[MessageResponse]
     total: int
+
+
+# Document Management Models
+
+class DocumentUploadResponse(BaseModel):
+    """Response after successful document upload."""
+    document_id: str = Field(..., description="Unique document identifier")
+    filename: str = Field(..., description="Original filename")
+    file_type: str = Field(..., description="File type (pdf, txt, docx)")
+    file_size: int = Field(..., description="File size in bytes")
+    chunks_created: int = Field(..., description="Number of chunks created")
+    upload_date: datetime = Field(..., description="Upload timestamp")
+
+
+class DocumentResponse(BaseModel):
+    """Response model for document metadata."""
+    document_id: str
+    filename: str
+    upload_date: str
+    total_chunks: int
+
+
+class DocumentListResponse(BaseModel):
+    """Response model for listing documents."""
+    documents: List[DocumentResponse]
+    total: int
+
+
+class ChunkResponse(BaseModel):
+    """Response model for a document chunk."""
+    chunk_id: str = Field(..., description="Unique chunk identifier")
+    text: str = Field(..., description="Chunk text content")
+    chunk_index: int = Field(..., description="Index of this chunk in the document")
+    metadata: dict = Field(default_factory=dict, description="Chunk metadata")
+
+
+class DocumentChunksResponse(BaseModel):
+    """Response model for listing document chunks."""
+    document_id: str
+    chunks: List[ChunkResponse]
+    total: int
+
+
+class VectorStoreStatsResponse(BaseModel):
+    """Response model for vector store statistics."""
+    total_documents: int
+    total_chunks: int
+    collection_name: str
