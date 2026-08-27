@@ -4,11 +4,50 @@ Supports PDF, TXT, and DOCX files.
 """
 from pypdf import PdfReader
 import docx
+import re
 from typing import List, Tuple
 from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def split_into_sentences(text: str) -> List[str]:
+    """
+    Split text into sentences using regex patterns.
+    Handles common sentence endings: . ? ! and common abbreviations.
+    
+    Args:
+        text: Input text to split
+        
+    Returns:
+        List of sentences
+    """
+    # Replace common abbreviations with placeholders to avoid false splits
+    text = re.sub(r'\bMr\.', 'Mr<PERIOD>', text)
+    text = re.sub(r'\bMrs\.', 'Mrs<PERIOD>', text)
+    text = re.sub(r'\bMs\.', 'Ms<PERIOD>', text)
+    text = re.sub(r'\bDr\.', 'Dr<PERIOD>', text)
+    text = re.sub(r'\bProf\.', 'Prof<PERIOD>', text)
+    text = re.sub(r'\bSr\.', 'Sr<PERIOD>', text)
+    text = re.sub(r'\bJr\.', 'Jr<PERIOD>', text)
+    text = re.sub(r'\be\.g\.', 'e<PERIOD>g<PERIOD>', text)
+    text = re.sub(r'\bi\.e\.', 'i<PERIOD>e<PERIOD>', text)
+    text = re.sub(r'\bInc\.', 'Inc<PERIOD>', text)
+    text = re.sub(r'\bLtd\.', 'Ltd<PERIOD>', text)
+    text = re.sub(r'\bCo\.', 'Co<PERIOD>', text)
+    text = re.sub(r'\bCorp\.', 'Corp<PERIOD>', text)
+    text = re.sub(r'\bvs\.', 'vs<PERIOD>', text)
+    text = re.sub(r'\betc\.', 'etc<PERIOD>', text)
+    
+    # Split on sentence endings followed by space and capital letter or newline
+    pattern = r'(?<=[.!?])\s+(?=[A-Z])|(?<=[.!?])\n'
+    sentences = re.split(pattern, text)
+    
+    # Restore periods in abbreviations
+    sentences = [s.replace('<PERIOD>', '.').strip() for s in sentences if s.strip()]
+    
+    return sentences
 
 
 class DocumentChunk:
@@ -101,7 +140,7 @@ class DocumentProcessor:
     
     def chunk_text(self, text: str, metadata: dict = None) -> List[DocumentChunk]:
         """
-        Split text into overlapping chunks.
+        Split text into overlapping chunks using sentence-aware boundaries.
         
         Args:
             text: Full document text
@@ -113,46 +152,69 @@ class DocumentProcessor:
         if not text or len(text.strip()) == 0:
             return []
         
-        chunks = []
-        start = 0
-        chunk_index = 0
+        # Split text into sentences using our custom sentence splitter
+        sentences = split_into_sentences(text)
         
-        while start < len(text):
-            # Calculate end position
-            end = start + self.chunk_size
+        chunks = []
+        current_chunk_sentences = []
+        current_chunk_length = 0
+        chunk_index = 0
+        start_char = 0
+        
+        for i, sentence in enumerate(sentences):
+            sentence_length = len(sentence)
             
-            # If not the last chunk, try to break at a sentence or word boundary
-            if end < len(text):
-                # Look for sentence endings
-                sentence_end = text.rfind('.', start, end)
-                if sentence_end != -1 and sentence_end > start + self.chunk_size // 2:
-                    end = sentence_end + 1
-                else:
-                    # Fall back to word boundary
-                    space = text.rfind(' ', start, end)
-                    if space != -1 and space > start + self.chunk_size // 2:
-                        end = space
+            # Check if adding this sentence would exceed chunk_size
+            if current_chunk_length + sentence_length > self.chunk_size and current_chunk_sentences:
+                # Create chunk from accumulated sentences
+                chunk_text = ' '.join(current_chunk_sentences).strip()
+                
+                if chunk_text:
+                    chunk = DocumentChunk(
+                        text=chunk_text,
+                        chunk_index=chunk_index,
+                        start_char=start_char,
+                        end_char=start_char + len(chunk_text),
+                        metadata=metadata
+                    )
+                    chunks.append(chunk)
+                    chunk_index += 1
+                
+                # Calculate overlap: keep last few sentences that fit in overlap size
+                overlap_sentences = []
+                overlap_length = 0
+                
+                for sent in reversed(current_chunk_sentences):
+                    if overlap_length + len(sent) <= self.chunk_overlap:
+                        overlap_sentences.insert(0, sent)
+                        overlap_length += len(sent) + 1  # +1 for space
+                    else:
+                        break
+                
+                # Start new chunk with overlap sentences
+                current_chunk_sentences = overlap_sentences
+                current_chunk_length = sum(len(s) + 1 for s in overlap_sentences)
+                start_char = start_char + len(chunk_text) - overlap_length
             
-            # Extract chunk
-            chunk_text = text[start:end].strip()
+            # Add current sentence to chunk
+            current_chunk_sentences.append(sentence)
+            current_chunk_length += sentence_length + 1  # +1 for space between sentences
+        
+        # Add the last chunk if there are remaining sentences
+        if current_chunk_sentences:
+            chunk_text = ' '.join(current_chunk_sentences).strip()
             
             if chunk_text:
                 chunk = DocumentChunk(
                     text=chunk_text,
                     chunk_index=chunk_index,
-                    start_char=start,
-                    end_char=end,
+                    start_char=start_char,
+                    end_char=start_char + len(chunk_text),
                     metadata=metadata
                 )
                 chunks.append(chunk)
-                chunk_index += 1
-            
-            # Move start position with overlap
-            start = end - self.chunk_overlap
-            if start < 0:
-                start = 0
         
-        logger.info(f"Created {len(chunks)} chunks from text (length: {len(text)})")
+        logger.info(f"Created {len(chunks)} sentence-aware chunks from {len(sentences)} sentences (text length: {len(text)})")
         return chunks
 
 
