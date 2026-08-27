@@ -10,19 +10,6 @@ from app.session_store import session_store
 client = TestClient(app)
 
 
-# Mock embedding model to avoid SSL issues
-@pytest.fixture(autouse=True)
-def mock_embedding_model():
-    """Mock the embedding model to avoid SSL issues during tests."""
-    mock_embedder = MagicMock()
-    mock_embedder.embed_text.return_value = [0.1] * 384  # Mock 384-dim embedding
-    mock_embedder.embed_batch.return_value = [[0.1] * 384] * 10  # Mock batch embeddings
-    mock_embedder.dimension = 384
-    
-    with patch('app.embeddings.get_embedding_model', return_value=mock_embedder):
-        yield
-
-
 @pytest.fixture(autouse=True)
 def clear_sessions():
     """Clear all sessions before each test."""
@@ -352,9 +339,6 @@ def test_delete_nonexistent_session():
 
 
 # Feature 4: Document Ingestion Tests
-# NOTE: These tests require downloading embedding models from HuggingFace.
-# They may fail in corporate environments with SSL certificate issues.
-# The functionality works correctly when SSL certificates are properly configured.
 
 @pytest.fixture
 def cleanup_documents():
@@ -377,7 +361,6 @@ def cleanup_documents():
                 file.unlink()
 
 
-@pytest.mark.skip(reason="Requires embedding model download - may fail with corporate SSL certificates")
 def test_upload_txt_document(cleanup_documents):
     """Test uploading a text document."""
     # Create a test text file
@@ -409,7 +392,6 @@ def test_upload_unsupported_file_type(cleanup_documents):
     assert "Unsupported file type" in response.json()["detail"]
 
 
-@pytest.mark.skip(reason="Requires embedding model download - may fail with corporate SSL certificates")
 def test_list_documents(cleanup_documents):
     """Test listing all documents."""
     # Upload a document first
@@ -430,7 +412,6 @@ def test_list_documents(cleanup_documents):
     assert "filename" in data["documents"][0]
 
 
-@pytest.mark.skip(reason="Requires embedding model download - may fail with corporate SSL certificates")
 def test_get_document_details(cleanup_documents):
     """Test getting details for a specific document."""
     # Upload a document
@@ -457,7 +438,6 @@ def test_get_nonexistent_document():
     assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="Requires embedding model download - may fail with corporate SSL certificates")
 def test_get_document_chunks(cleanup_documents):
     """Test getting chunks for a document."""
     # Upload a document
@@ -480,7 +460,6 @@ def test_get_document_chunks(cleanup_documents):
     assert "chunk_index" in data["chunks"][0]
 
 
-@pytest.mark.skip(reason="Requires embedding model download - may fail with corporate SSL certificates")
 def test_delete_document(cleanup_documents):
     """Test deleting a document."""
     # Upload a document
@@ -506,7 +485,6 @@ def test_delete_nonexistent_document():
     assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="Requires embedding model download - may fail with corporate SSL certificates")
 def test_vector_store_stats(cleanup_documents):
     """Test getting vector store statistics."""
     # Upload a document

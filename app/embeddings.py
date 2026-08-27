@@ -7,12 +7,28 @@ from typing import List
 import logging
 import ssl
 import os
+import certifi
 
 logger = logging.getLogger(__name__)
 
-# Disable SSL verification for HuggingFace downloads if needed
+# Disable SSL verification for HuggingFace downloads (corporate environment workaround)
 os.environ["CURL_CA_BUNDLE"] = ""
+os.environ["REQUESTS_CA_BUNDLE"] = ""
+os.environ["SSL_CERT_FILE"] = ""
+os.environ["HTTPX_NO_VERIFY_SSL"] = "1"
+
+# Create unverified SSL context
 ssl._create_default_https_context = ssl._create_unverified_context
+
+# Also set for httpx which HuggingFace Hub uses
+import httpx
+original_client_init = httpx.Client.__init__
+
+def patched_client_init(self, *args, **kwargs):
+    kwargs['verify'] = False
+    original_client_init(self, *args, **kwargs)
+
+httpx.Client.__init__ = patched_client_init
 
 
 class EmbeddingModel:
@@ -28,7 +44,7 @@ class EmbeddingModel:
         """
         logger.info(f"Loading embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
-        self.dimension = self.model.get_sentence_embedding_dimension()
+        self.dimension = self.model.get_embedding_dimension()
         logger.info(f"Embedding model loaded. Dimension: {self.dimension}")
     
     def embed_text(self, text: str) -> List[float]:
