@@ -19,9 +19,9 @@ Executive-level AI assistant that understands logistics operations, provides rea
 - [x] **Feature 2: Structured Output** - Schema-validated JSON answers for reliable downstream use
 - [x] **Feature 3: Conversation History** - Session management and multi-turn conversations
 
-### Phase 3: Knowledge (Planned)
-- [ ] **Feature 4: Document Ingestion** - RAG pipeline for company documents
-- [ ] **Feature 5: Semantic Search** - Vector-based document retrieval
+### Phase 3: Knowledge ✅ (in progress)
+- [x] **Feature 4: Document Ingestion** - Upload PDF/TXT/DOCX, sentence-aware chunking, local embeddings, ChromaDB storage
+- [x] **Feature 5: Semantic Search** - Vector similarity search over indexed chunks with 0.0-1.0 relevance scores
 - [ ] **Feature 6: Smart Routing** - Intent-based query routing
 
 ### Phase 4: Intelligence (Planned)
@@ -39,17 +39,25 @@ Executive-level AI assistant that understands logistics operations, provides rea
 ```
 ai-logistics-assistant/
 ├── app/
-│   ├── main.py              # FastAPI application + UI routes
-│   ├── models.py            # Pydantic models
-│   ├── config.py            # Configuration management
-│   └── llm_client.py        # Ollama integration
+│   ├── main.py                # FastAPI application + UI routes
+│   ├── models.py              # Pydantic models
+│   ├── config.py              # Configuration management
+│   ├── llm_client.py          # Ollama integration
+│   ├── session_store.py       # In-memory conversation history (Feature 3)
+│   ├── document_processor.py  # PDF/TXT/DOCX parsing + sentence-aware chunking (Feature 4)
+│   ├── embeddings.py          # Local sentence-transformers embedding model (Feature 4/5)
+│   └── vector_store.py        # ChromaDB storage + ranked similarity search (Feature 4/5)
 ├── ui/
-│   └── index.html           # Web chat interface
+│   └── index.html             # Tabbed web UI: Chat, Structured, Documents, Search
 ├── tests/
-│   └── test_api.py          # API tests
+│   ├── conftest.py            # Offline/SSL env setup for tests
+│   └── test_api.py            # API tests (35 tests across all features)
+├── data/
+│   ├── chroma/                # Persisted vector DB (gitignored)
+│   └── uploads/                # Uploaded source files (gitignored)
 ├── .github/
 │   └── workflows/
-│       └── ci.yml           # CI/CD pipeline
+│       └── ci.yml             # CI/CD pipeline
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -84,9 +92,10 @@ uvicorn app.main:app --reload --port 8000
 ### Using the Web UI 🌐
 
 1. **Open your browser** and go to `http://localhost:8000`
-2. **Click example queries** or type your own question
-3. **Watch the AI respond** in real-time with typing indicators
-4. **Ask follow-up questions** about logistics and supply chain
+2. **Chat tab** - ask questions, sessions are tracked automatically; use History to revisit past conversations
+3. **Structured tab** - get a schema-validated summary/key-points/recommendations/risks/confidence breakdown
+4. **Documents tab** - drag-and-drop or click to upload PDF/TXT/DOCX files; view live chunk/document counts
+5. **Search tab** - ask a question and get ranked, scored chunks from your uploaded documents (optionally scoped to one document)
 
 ### Using the API 🔌
 
@@ -113,6 +122,21 @@ curl -X POST http://localhost:8000/api/chat \
 
 # Get conversation history
 curl http://localhost:8000/api/sessions/<session-id>/history
+
+# Upload a document (Feature 4)
+curl -X POST http://localhost:8000/api/documents/upload \
+  -F "file=@company_handbook.pdf"
+
+# List indexed documents
+curl http://localhost:8000/api/documents
+
+# Semantic search over indexed documents (Feature 5)
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is our on-time delivery target?", "top_k": 5}'
+
+# Vector store stats
+curl http://localhost:8000/api/documents/stats
 ```
 
 Structured response shape:
@@ -144,8 +168,10 @@ pytest tests/ --cov=app --cov-report=html
 
 - **Framework**: FastAPI (Python 3.11+)
 - **LLM**: Ollama (qwen2.5:3b - local, privacy-first)
-- **Vector DB**: ChromaDB (coming in Phase 3)
-- **Testing**: pytest
+- **Embeddings**: sentence-transformers (all-MiniLM-L6-v2, local/offline)
+- **Vector DB**: ChromaDB (persisted locally under `data/chroma`)
+- **Document parsing**: pypdf, python-docx
+- **Testing**: pytest (35 tests, mocked LLM calls)
 - **CI/CD**: GitHub Actions
 
 ## 📚 Learning Path
@@ -178,4 +204,4 @@ Built as part of AI Engineering learning journey focusing on:
 
 ---
 
-**Current Status**: Phase 2 Complete ✅ (Memory & Sessions) | Next: Phase 3 (Knowledge/RAG)
+**Current Status**: Features 1-5 Complete ✅ (Chat, Structured Output, Memory, Document Ingestion, Semantic Search) | Next: Feature 6 (Smart Routing)

@@ -29,6 +29,9 @@ from app.models import (
     ChunkResponse,
     DocumentChunksResponse,
     VectorStoreStatsResponse,
+    SearchRequest,
+    SearchResult,
+    SearchResponse,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -155,7 +158,7 @@ async def status():
         "status": "online",
         "app": settings.app_name,
         "version": "0.1.0",
-        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion"],
+        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion", "semantic_search"],
         "model": llm_client.model
     }
 
@@ -164,14 +167,14 @@ async def status():
 async def chat(request: ChatRequest):
     """
     Chat endpoint with optional session support.
-    
+
     If session_id is provided, conversation history is maintained.
     Otherwise, each request is independent (stateless).
     """
     try:
         # Build messages with system prompt
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        
+
         # If session ID provided, load conversation history
         if request.session_id:
             session = session_store.get_session(request.session_id)
@@ -180,27 +183,27 @@ async def chat(request: ChatRequest):
                     status_code=404,
                     detail=f"Session {request.session_id} not found"
                 )
-            
+
             # Add previous messages from session
             for msg in session.messages:
                 messages.append({"role": msg.role, "content": msg.content})
-        
+
         # Add current user message
         messages.append({"role": "user", "content": request.message})
-        
+
         # Get LLM response
         response_text = await llm_client.chat(messages)
-        
+
         # Store messages in session if session_id provided
         if request.session_id:
             session_store.add_message(request.session_id, "user", request.message)
             session_store.add_message(request.session_id, "assistant", response_text)
-        
+
         return ChatResponse(
             response=response_text,
             model=llm_client.model
         )
-    
+
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=503,
@@ -286,7 +289,7 @@ async def get_session(session_id: str):
     session = session_store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     return SessionResponse(
         session_id=session.session_id,
         created_at=session.created_at,
@@ -302,7 +305,7 @@ async def get_session_history(session_id: str, limit: Optional[int] = None):
     session = session_store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     messages = session_store.get_history(session_id, limit=limit)
     return HistoryResponse(
         session_id=session_id,
@@ -345,7 +348,7 @@ SUPPORTED_FILE_TYPES = {
 async def upload_document(file: UploadFile = File(...)):
     """
     Upload and process a document.
-    
+
     Supported formats: PDF, TXT, DOCX
     """
     try:
@@ -353,32 +356,32 @@ async def upload_document(file: UploadFile = File(...)):
         if file.content_type not in SUPPORTED_FILE_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type. Supported: PDF, TXT, DOCX"
+                detail="Unsupported file type. Supported: PDF, TXT, DOCX"
             )
-        
+
         file_type = SUPPORTED_FILE_TYPES[file.content_type]
-        
+
         # Generate unique document ID
         document_id = str(uuid.uuid4())
-        
+
         # Save uploaded file temporarily
         file_path = UPLOAD_DIR / f"{document_id}_{file.filename}"
         content = await file.read()
         file_size = len(content)
-        
+
         with open(file_path, "wb") as f:
             f.write(content)
-        
+
         # Parse document
         doc_processor = get_document_processor()
         text = doc_processor.parse_file(file_path, file_type)
-        
+
         if not text or len(text.strip()) == 0:
             raise HTTPException(
                 status_code=400,
                 detail="Document is empty or could not be parsed"
             )
-        
+
         # Chunk document
         metadata = {
             "filename": file.filename,
@@ -386,12 +389,12 @@ async def upload_document(file: UploadFile = File(...)):
             "file_size": file_size,
         }
         chunks = doc_processor.chunk_text(text, metadata=metadata)
-        
+
         # Generate embeddings
         embedding_model = get_embedding_model()
         chunk_texts = [chunk.text for chunk in chunks]
         embeddings = embedding_model.embed_batch(chunk_texts)
-        
+
         # Store in vector database
         vector_store = get_vector_store()
         chunks_added = vector_store.add_document(
@@ -401,7 +404,7 @@ async def upload_document(file: UploadFile = File(...)):
             embeddings=embeddings,
             metadata=metadata
         )
-        
+
         return DocumentUploadResponse(
             document_id=document_id,
             filename=file.filename,
@@ -410,7 +413,7 @@ async def upload_document(file: UploadFile = File(...)):
             chunks_created=chunks_added,
             upload_date=datetime.now()
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -426,7 +429,7 @@ async def list_documents():
     try:
         vector_store = get_vector_store()
         documents = vector_store.list_documents()
-        
+
         return DocumentListResponse(
             documents=[
                 DocumentResponse(
@@ -452,7 +455,7 @@ async def get_vector_store_stats():
     try:
         vector_store = get_vector_store()
         stats = vector_store.get_stats()
-        
+
         return VectorStoreStatsResponse(
             total_documents=stats["total_documents"],
             total_chunks=stats["total_chunks"],
@@ -471,11 +474,11 @@ async def get_document(document_id: str):
     try:
         vector_store = get_vector_store()
         documents = vector_store.list_documents()
-        
+
         doc = next((d for d in documents if d["document_id"] == document_id), None)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         return DocumentResponse(
             document_id=doc["document_id"],
             filename=doc["filename"],
@@ -497,10 +500,10 @@ async def get_document_chunks(document_id: str):
     try:
         vector_store = get_vector_store()
         chunks = vector_store.get_document_chunks(document_id)
-        
+
         if not chunks:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         return DocumentChunksResponse(
             document_id=document_id,
             chunks=[
@@ -529,14 +532,14 @@ async def delete_document(document_id: str):
     try:
         vector_store = get_vector_store()
         chunks_deleted = vector_store.delete_document(document_id)
-        
+
         if chunks_deleted == 0:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         # Clean up uploaded file if it exists
         for file in UPLOAD_DIR.glob(f"{document_id}_*"):
             file.unlink()
-        
+
         return None
     except HTTPException:
         raise
@@ -544,6 +547,70 @@ async def delete_document(document_id: str):
         raise HTTPException(
             status_code=500,
             detail=f"Error deleting document: {str(e)}"
+        )
+
+
+# Semantic Search Endpoints (Feature 5)
+
+@app.post("/api/search", response_model=SearchResponse)
+async def search_documents(request: SearchRequest):
+    """
+    Semantic search across indexed document chunks.
+
+    Embeds the query with the same model used during ingestion, then finds the
+    top_k most similar chunks by vector distance. Optionally scoped to a single
+    document via document_id. Returns a similarity score (0.0-1.0) per result —
+    a high score means the text is close in meaning, not a guarantee it answers
+    the question.
+    """
+    try:
+        embedding_model = get_embedding_model()
+        query_embedding = embedding_model.embed_text(request.query)
+
+        vector_store = get_vector_store()
+        ranked = vector_store.search_ranked(
+            query_embedding,
+            n_results=request.top_k,
+            document_id=request.document_id,
+        )
+
+        results = [
+            SearchResult(
+                chunk_id=r["chunk_id"],
+                text=r["text"],
+                score=r["score"],
+                document_id=r["metadata"].get("document_id", ""),
+                filename=r["metadata"].get("filename", ""),
+                chunk_index=r["metadata"].get("chunk_index", 0),
+            )
+            for r in ranked
+        ]
+
+        return SearchResponse(query=request.query, results=results, total=len(results))
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error performing search: {str(e)}"
+        )
+
+
+@app.get("/api/search/stats", response_model=VectorStoreStatsResponse)
+async def search_stats():
+    """Vector store statistics — total indexed chunks/documents (alias of /api/documents/stats)."""
+    try:
+        vector_store = get_vector_store()
+        stats = vector_store.get_stats()
+
+        return VectorStoreStatsResponse(
+            total_documents=stats["total_documents"],
+            total_chunks=stats["total_chunks"],
+            collection_name=stats["collection_name"]
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving stats: {str(e)}"
         )
 
 

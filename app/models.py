@@ -120,3 +120,29 @@ class VectorStoreStatsResponse(BaseModel):
     total_documents: int
     total_chunks: int
     collection_name: str
+
+
+# Semantic Search Models (Feature 5)
+
+class SearchRequest(BaseModel):
+    """Request model for semantic search over indexed documents."""
+    query: str = Field(..., min_length=1, description="Natural language search query")
+    top_k: int = Field(5, ge=1, le=20, description="Number of results to return")
+    document_id: Optional[str] = Field(None, description="Optional: scope search to a single document")
+
+
+class SearchResult(BaseModel):
+    """A single ranked search result."""
+    chunk_id: str = Field(..., description="Unique chunk identifier")
+    text: str = Field(..., description="Matched chunk text")
+    score: float = Field(..., ge=0.0, le=1.0, description="Similarity score (higher = more similar)")
+    document_id: str = Field(..., description="Source document identifier")
+    filename: str = Field(..., description="Source document filename")
+    chunk_index: int = Field(..., description="Index of this chunk within its document")
+
+
+class SearchResponse(BaseModel):
+    """Response model for semantic search results."""
+    query: str
+    results: List[SearchResult]
+    total: int

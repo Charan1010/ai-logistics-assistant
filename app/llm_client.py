@@ -8,18 +8,18 @@ from app.config import settings
 
 class LLMClient:
     """Client for making requests to Ollama API."""
-    
+
     def __init__(self):
         self.base_url = settings.ollama_base_url
         self.model = settings.ollama_model
-    
+
     async def chat(self, messages: List[Dict[str, str]]) -> str:
         """
         Send chat messages to Ollama and get response.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
-            
+
         Returns:
             str: Assistant's response text
         """
