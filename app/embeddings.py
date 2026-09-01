@@ -11,6 +11,10 @@ import certifi
 
 logger = logging.getLogger(__name__)
 
+# Force offline mode to use cached models (avoids SSL issues with HuggingFace Hub)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 # Disable SSL verification for HuggingFace downloads (corporate environment workaround)
 os.environ["CURL_CA_BUNDLE"] = ""
 os.environ["REQUESTS_CA_BUNDLE"] = ""
@@ -19,16 +23,6 @@ os.environ["HTTPX_NO_VERIFY_SSL"] = "1"
 
 # Create unverified SSL context
 ssl._create_default_https_context = ssl._create_unverified_context
-
-# Also set for httpx which HuggingFace Hub uses
-import httpx
-original_client_init = httpx.Client.__init__
-
-def patched_client_init(self, *args, **kwargs):
-    kwargs['verify'] = False
-    original_client_init(self, *args, **kwargs)
-
-httpx.Client.__init__ = patched_client_init
 
 
 class EmbeddingModel:
@@ -43,7 +37,8 @@ class EmbeddingModel:
                        Default: all-MiniLM-L6-v2 (fast, 384 dimensions)
         """
         logger.info(f"Loading embedding model: {model_name}")
-        self.model = SentenceTransformer(model_name)
+        # Use local_files_only to avoid network calls in corporate environments
+        self.model = SentenceTransformer(model_name, local_files_only=True)
         self.dimension = self.model.get_embedding_dimension()
         logger.info(f"Embedding model loaded. Dimension: {self.dimension}")
     
