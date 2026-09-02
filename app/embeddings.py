@@ -7,21 +7,26 @@ import logging
 import ssl
 import os
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 # These must be set BEFORE importing sentence_transformers/huggingface_hub — that
 # library reads them once at import time, so setting them afterward has no effect.
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# Only forced when embeddings_offline_mode=True (opt-in via .env) — on CI/fresh
+# machines with no cached model, forcing offline mode here would break entirely.
+if settings.embeddings_offline_mode:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-# Disable SSL verification for HuggingFace downloads (corporate environment workaround)
-os.environ.setdefault("CURL_CA_BUNDLE", "")
-os.environ.setdefault("REQUESTS_CA_BUNDLE", "")
-os.environ.setdefault("SSL_CERT_FILE", "")
-os.environ.setdefault("HTTPX_NO_VERIFY_SSL", "1")
+    # Disable SSL verification for HuggingFace downloads (corporate environment workaround)
+    os.environ.setdefault("CURL_CA_BUNDLE", "")
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", "")
+    os.environ.setdefault("SSL_CERT_FILE", "")
+    os.environ.setdefault("HTTPX_NO_VERIFY_SSL", "1")
 
-# Create unverified SSL context
-ssl._create_default_https_context = ssl._create_unverified_context
+    # Create unverified SSL context
+    ssl._create_default_https_context = ssl._create_unverified_context
 
 from sentence_transformers import SentenceTransformer  # noqa: E402 (must follow env setup above)
 

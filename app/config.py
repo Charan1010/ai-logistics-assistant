@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     app_name: str = "AI Logistics Assistant"
     log_level: str = "INFO"
 
+    # Embeddings: enable only on networks that block HuggingFace Hub (e.g. corporate
+    # proxies with TLS interception) AND already have the model cached locally.
+    # Leave False on CI/fresh machines so the model can download normally.
+    embeddings_offline_mode: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
