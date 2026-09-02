@@ -1,741 +1,763 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Logistics Assistant</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Logistics Assistant</title>
+<style>
+    :root {
+        --primary: #4f46e5;
+        --primary-dark: #4338ca;
+        --primary-light: #6366f1;
+        --bg: #f1f5f9;
+        --surface: #ffffff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --success: #16a34a;
+        --danger: #dc2626;
+        --warning: #d97706;
+        --radius: 14px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+    }
+    .app {
+        width: 100%;
+        max-width: 1100px;
+        height: 92vh;
+        background: var(--surface);
+        border-radius: 22px;
+        box-shadow: 0 30px 80px rgba(0,0,0,0.35);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
+    /* Header */
+    .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 18px 24px 0;
+        flex-shrink: 0;
+    }
+    .header-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+    }
+    .header-title { display: flex; align-items: center; gap: 10px; }
+    .header-title h1 { font-size: 20px; font-weight: 700; }
+    .status { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: 0.95; }
+    .status-dot { width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: pulse 2s infinite; }
+    .status-dot.offline { background: #f87171; animation: none; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-        .container {
-            width: 90%;
-            max-width: 800px;
-            height: 90vh;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
+    /* Tabs */
+    .tabs { display: flex; gap: 4px; }
+    .tab-btn {
+        background: rgba(255,255,255,0.12);
+        border: none;
+        color: rgba(255,255,255,0.85);
+        padding: 10px 18px;
+        border-radius: 10px 10px 0 0;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .tab-btn:hover { background: rgba(255,255,255,0.22); color: white; }
+    .tab-btn.active { background: var(--surface); color: var(--primary); }
 
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
+    /* Panels */
+    .panels { flex: 1; overflow: hidden; display: flex; position: relative; }
+    .panel { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+    .panel.active { display: flex; }
 
-        .header h1 {
-            font-size: 24px;
-            font-weight: 600;
-        }
+    /* ---- Chat panel ---- */
+    .chat-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 20px;
+        border-bottom: 1px solid var(--border);
+        background: #fafbff;
+        font-size: 12px;
+        color: var(--text-muted);
+        gap: 12px;
+    }
+    .session-pill {
+        font-family: 'Courier New', monospace;
+        background: #eef2ff;
+        color: var(--primary);
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-size: 11px;
+    }
+    .toolbar-actions { display: flex; gap: 8px; }
+    .chip-btn {
+        background: white;
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 6px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: all 0.15s;
+    }
+    .chip-btn:hover { border-color: var(--primary); color: var(--primary); }
 
-        .header p {
-            font-size: 14px;
-            opacity: 0.9;
-            margin-top: 5px;
-        }
+    .sessions-panel {
+        display: none;
+        position: absolute;
+        right: 24px;
+        top: 150px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        min-width: 280px;
+        max-height: 360px;
+        overflow-y: auto;
+        z-index: 50;
+        border: 1px solid var(--border);
+    }
+    .sessions-panel.show { display: block; }
+    .session-item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+    .session-item:hover { background: #f8fafc; }
+    .session-item.active { background: #eef2ff; border-left: 3px solid var(--primary); }
+    .session-item-id { font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700; }
+    .session-item-info { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
-        .session-controls {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            margin-top: 10px;
-            font-size: 12px;
-        }
+    .chat-container { flex: 1; overflow-y: auto; padding: 20px; background: var(--bg); }
+    .message { margin-bottom: 16px; display: flex; gap: 12px; animation: slideIn 0.25s ease; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .message.user { flex-direction: row-reverse; }
+    .avatar { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; color: white; flex-shrink: 0; }
+    .avatar.user { background: linear-gradient(135deg, #667eea, #764ba2); }
+    .avatar.assistant { background: linear-gradient(135deg, #f093fb, #f5576c); }
+    .message-content { max-width: 72%; padding: 12px 16px; border-radius: 14px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; }
+    .message.user .message-content { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border-bottom-right-radius: 4px; }
+    .message.assistant .message-content { background: white; color: var(--text); border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
 
-        .session-id {
-            font-family: 'Courier New', monospace;
-            background: rgba(255,255,255,0.2);
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
+    .welcome-message { text-align: center; color: var(--text-muted); padding: 40px 20px; }
+    .welcome-message h2 { color: var(--text); margin-bottom: 10px; }
+    .example-queries { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+    .example-query { padding: 8px 16px; background: white; border: 2px solid var(--border); border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+    .example-query:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-2px); }
 
-        .new-session-btn {
-            background: rgba(255,255,255,0.3);
-            border: 1px solid rgba(255,255,255,0.5);
-            color: white;
-            padding: 4px 12px;
-            border-radius: 12px;
-            cursor: pointer;
-            font-size: 11px;
-            transition: all 0.2s;
-        }
+    .typing-indicator { display: none; align-items: center; gap: 12px; padding: 0 20px 12px; background: var(--bg); }
+    .typing-indicator.active { display: flex; }
+    .typing-dots { display: flex; gap: 4px; padding: 12px 16px; background: white; border-radius: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .typing-dot { width: 7px; height: 7px; background: #94a3b8; border-radius: 50%; animation: typing 1.4s infinite; }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typing { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-8px); } }
 
-        .new-session-btn:hover {
-            background: rgba(255,255,255,0.4);
-        }
+    .input-container { padding: 16px 20px; background: white; border-top: 1px solid var(--border); flex-shrink: 0; }
+    .input-wrapper { display: flex; gap: 10px; }
+    input[type="text"] {
+        flex: 1; padding: 13px 16px; border: 2px solid var(--border); border-radius: 12px; font-size: 14px; outline: none; transition: border-color 0.2s;
+    }
+    input[type="text"]:focus { border-color: var(--primary); }
+    button.primary {
+        padding: 13px 26px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s;
+    }
+    button.primary:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(102,126,234,0.4); }
+    button.primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 
-        .sessions-dropdown {
-            position: relative;
-            display: inline-block;
-        }
+    /* ---- Structured panel ---- */
+    .structured-body { padding: 24px; overflow-y: auto; flex: 1; background: var(--bg); }
+    .structured-card { background: white; border-radius: var(--radius); padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 16px; }
+    .structured-card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+    .confidence-high { background: #dcfce7; color: var(--success); }
+    .confidence-mid { background: #fef3c7; color: var(--warning); }
+    .confidence-low { background: #fee2e2; color: var(--danger); }
+    .pill-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .pill-list li { background: #f8fafc; padding: 10px 14px; border-radius: 10px; font-size: 13px; border-left: 3px solid var(--primary); }
+    .pill-list.risks li { border-left-color: var(--danger); }
+    .empty-hint { color: var(--text-muted); text-align: center; padding: 60px 20px; font-size: 14px; }
 
-        .sessions-btn {
-            background: rgba(255,255,255,0.3);
-            border: 1px solid rgba(255,255,255,0.5);
-            color: white;
-            padding: 4px 12px;
-            border-radius: 12px;
-            cursor: pointer;
-            font-size: 11px;
-            transition: all 0.2s;
-        }
+    /* ---- Documents panel ---- */
+    .documents-body { padding: 24px; overflow-y: auto; flex: 1; background: var(--bg); }
+    .upload-zone {
+        border: 2px dashed var(--border); border-radius: var(--radius); padding: 30px; text-align: center; background: white; cursor: pointer; transition: all 0.2s; margin-bottom: 20px;
+    }
+    .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); background: #f5f6ff; }
+    .upload-zone p { color: var(--text-muted); font-size: 13px; margin-top: 6px; }
+    .upload-zone .icon { font-size: 32px; }
+    #fileInput { display: none; }
+    .doc-stats { display: flex; gap: 12px; margin-bottom: 20px; }
+    .stat-card { flex: 1; background: white; border-radius: 12px; padding: 14px 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .stat-card .num { font-size: 22px; font-weight: 800; color: var(--primary); }
+    .stat-card .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .doc-list { display: flex; flex-direction: column; gap: 10px; }
+    .doc-item {
+        background: white; border-radius: 12px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    .doc-item-info { display: flex; align-items: center; gap: 12px; }
+    .doc-icon { width: 38px; height: 38px; border-radius: 10px; background: #eef2ff; color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .doc-name { font-weight: 600; font-size: 13px; }
+    .doc-meta { font-size: 11px; color: var(--text-muted); }
+    .icon-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 6px; border-radius: 8px; }
+    .icon-btn:hover { background: #fee2e2; color: var(--danger); }
 
-        .sessions-btn:hover {
-            background: rgba(255,255,255,0.4);
-        }
+    /* ---- Search panel ---- */
+    .search-body { padding: 24px; overflow-y: auto; flex: 1; background: var(--bg); }
+    .search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+    .search-bar select { padding: 12px; border-radius: 12px; border: 2px solid var(--border); font-size: 13px; }
+    .search-result { background: white; border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .search-result-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .score-badge { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 8px; }
+    .score-high { background: #dcfce7; color: var(--success); }
+    .score-mid { background: #fef3c7; color: var(--warning); }
+    .score-low { background: #fee2e2; color: var(--danger); }
+    .search-result-source { font-size: 11px; color: var(--text-muted); }
+    .search-result-text { font-size: 13px; line-height: 1.5; color: var(--text); }
 
-        .sessions-list {
-            display: none;
-            position: absolute;
-            top: 100%;
-            right: 0;
-            margin-top: 8px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-            min-width: 300px;
-            max-height: 400px;
-            overflow-y: auto;
-            z-index: 1000;
-        }
-
-        .sessions-list.show {
-            display: block;
-        }
-
-        .session-item {
-            padding: 12px 16px;
-            border-bottom: 1px solid #e2e8f0;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .session-item:hover {
-            background: #f8fafc;
-        }
-
-        .session-item.active {
-            background: #ede9fe;
-            border-left: 3px solid #667eea;
-        }
-
-        .session-item-id {
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            color: #667eea;
-            font-weight: bold;
-        }
-
-        .session-item-info {
-            font-size: 11px;
-            color: #64748b;
-            margin-top: 4px;
-        }
-
-        .session-item-time {
-            font-size: 10px;
-            color: #94a3b8;
-        }
-
-        .no-sessions {
-            padding: 20px;
-            text-align: center;
-            color: #94a3b8;
-            font-size: 12px;
-        }
-
-        .status {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 8px;
-            font-size: 12px;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            background: #4ade80;
-            border-radius: 50%;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        .chat-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            background: #f8fafc;
-        }
-
-        .message {
-            margin-bottom: 16px;
-            display: flex;
-            gap: 12px;
-            animation: slideIn 0.3s ease;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .message.user {
-            flex-direction: row-reverse;
-        }
-
-        .avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            color: white;
-            flex-shrink: 0;
-        }
-
-        .avatar.user {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-
-        .avatar.assistant {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        }
-
-        .message-content {
-            max-width: 70%;
-            padding: 12px 16px;
-            border-radius: 12px;
-            line-height: 1.5;
-        }
-
-        .message.user .message-content {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-bottom-right-radius: 4px;
-        }
-
-        .message.assistant .message-content {
-            background: white;
-            color: #1e293b;
-            border-bottom-left-radius: 4px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        .input-container {
-            padding: 20px;
-            background: white;
-            border-top: 1px solid #e2e8f0;
-        }
-
-        .input-wrapper {
-            display: flex;
-            gap: 12px;
-        }
-
-        #messageInput {
-            flex: 1;
-            padding: 14px 18px;
-            border: 2px solid #e2e8f0;
-            border-radius: 12px;
-            font-size: 15px;
-            outline: none;
-            transition: border-color 0.3s;
-        }
-
-        #messageInput:focus {
-            border-color: #667eea;
-        }
-
-        #sendButton {
-            padding: 14px 28px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        #sendButton:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
-        }
-
-        #sendButton:active {
-            transform: translateY(0);
-        }
-
-        #sendButton:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .typing-indicator {
-            display: none;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .typing-indicator.active {
-            display: flex;
-        }
-
-        .typing-dots {
-            display: flex;
-            gap: 4px;
-            padding: 12px 16px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        .typing-dot {
-            width: 8px;
-            height: 8px;
-            background: #94a3b8;
-            border-radius: 50%;
-            animation: typing 1.4s infinite;
-        }
-
-        .typing-dot:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-
-        .typing-dot:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes typing {
-            0%, 60%, 100% {
-                transform: translateY(0);
-            }
-            30% {
-                transform: translateY(-10px);
-            }
-        }
-
-        .welcome-message {
-            text-align: center;
-            color: #64748b;
-            padding: 40px 20px;
-        }
-
-        .welcome-message h2 {
-            color: #1e293b;
-            margin-bottom: 12px;
-        }
-
-        .example-queries {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            justify-content: center;
-            margin-top: 20px;
-        }
-
-        .example-query {
-            padding: 8px 16px;
-            background: white;
-            border: 2px solid #e2e8f0;
-            border-radius: 20px;
-            font-size: 13px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .example-query:hover {
-            border-color: #667eea;
-            color: #667eea;
-            transform: translateY(-2px);
-        }
-    </style>
+    .toast {
+        position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+        background: var(--text); color: white; padding: 12px 22px; border-radius: 10px; font-size: 13px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.3); z-index: 999; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .toast.error { background: var(--danger); }
+</style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🚚 AI Logistics Assistant</h1>
-            <p>Your expert guide for supply chain operations</p>
-            <div class="session-controls">
-                <span>Session: <span class="session-id" id="sessionId">Creating...</span></span>
-                <button class="new-session-btn" onclick="createNewSession()">🔄 New Session</button>
-                <div class="sessions-dropdown">
-                    <button class="sessions-btn" onclick="toggleSessionsList()">📋 Sessions</button>
-                    <div class="sessions-list" id="sessionsList">
-                        <div class="no-sessions">Loading sessions...</div>
-                    </div>
-                </div>
+<div class="app">
+    <div class="header">
+        <div class="header-top">
+            <div class="header-title">
+                <span style="font-size:22px;">🚚</span>
+                <h1>AI Logistics Assistant</h1>
             </div>
             <div class="status">
-                <div class="status-dot"></div>
-                <span id="statusText">Connected to qwen2.5:3b</span>
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
             </div>
         </div>
-
-        <div class="chat-container" id="chatContainer">
-            <div class="welcome-message">
-                <h2>Welcome! 👋</h2>
-                <p>I'm your AI assistant for logistics and supply chain operations.</p>
-                <p>Ask me anything about:</p>
-                <div class="example-queries">
-                    <div class="example-query" onclick="sendExample('What are key supply chain efficiency metrics?')">
-                        📊 Key Metrics
-                    </div>
-                    <div class="example-query" onclick="sendExample('How can I optimize last-mile delivery?')">
-                        🚚 Last-Mile Delivery
-                    </div>
-                    <div class="example-query" onclick="sendExample('What are best practices for warehouse management?')">
-                        📦 Warehouse Operations
-                    </div>
-                    <div class="example-query" onclick="sendExample('How do I handle supply chain disruptions?')">
-                        ⚠️ Risk Management
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="typing-indicator" id="typingIndicator">
-            <div class="avatar assistant">AI</div>
-            <div class="typing-dots">
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-            </div>
-        </div>
-
-        <div class="input-container">
-            <div class="input-wrapper">
-                <input 
-                    type="text" 
-                    id="messageInput" 
-                    placeholder="Ask about logistics, supply chain, shipping..."
-                    onkeypress="handleKeyPress(event)"
-                >
-                <button id="sendButton" onclick="sendMessage()">Send</button>
-            </div>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Chat</button>
+            <button class="tab-btn" data-tab="structured" onclick="switchTab('structured')">📋 Structured</button>
+            <button class="tab-btn" data-tab="documents" onclick="switchTab('documents')">📄 Documents</button>
+            <button class="tab-btn" data-tab="search" onclick="switchTab('search')">🔍 Search</button>
         </div>
     </div>
 
-    <script>
-        const API_URL = 'http://localhost:8000';
-        let messageCount = 0;
-        let currentSessionId = null;
+    <div class="panels">
+        <!-- CHAT PANEL -->
+        <div class="panel active" id="panel-chat">
+            <div class="chat-toolbar">
+                <span>Session: <span class="session-pill" id="sessionId">creating...</span></span>
+                <div class="toolbar-actions">
+                    <button class="chip-btn" onclick="createNewSession()">🔄 New session</button>
+                    <button class="chip-btn" onclick="toggleSessionsList()">📋 History</button>
+                </div>
+            </div>
+            <div class="sessions-panel" id="sessionsList"></div>
 
-        async function createSession() {
-            try {
-                const response = await fetch(`${API_URL}/api/sessions`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({})
-                });
-                
-                if (!response.ok) {
-                    throw new Error('Failed to create session');
-                }
-                
-                const data = await response.json();
-                currentSessionId = data.session_id;
-                
-                // Display shortened session ID
-                const shortId = currentSessionId.substring(0, 8);
-                document.getElementById('sessionId').textContent = shortId + '...';
-                document.getElementById('sessionId').title = currentSessionId;
-                
-                console.log('Session created:', currentSessionId);
-            } catch (error) {
-                console.error('Error creating session:', error);
-                document.getElementById('sessionId').textContent = 'No session';
-            }
-        }
-
-        async function createNewSession() {
-            // Clear chat
-            const chatContainer = document.getElementById('chatContainer');
-            chatContainer.innerHTML = `
+            <div class="chat-container" id="chatContainer">
                 <div class="welcome-message">
                     <h2>Welcome! 👋</h2>
                     <p>I'm your AI assistant for logistics and supply chain operations.</p>
-                    <p>Ask me anything about:</p>
                     <div class="example-queries">
-                        <div class="example-query" onclick="sendExample('What are key supply chain efficiency metrics?')">
-                            📊 Key Metrics
-                        </div>
-                        <div class="example-query" onclick="sendExample('How can I optimize last-mile delivery?')">
-                            🚚 Last-Mile Delivery
-                        </div>
-                        <div class="example-query" onclick="sendExample('What are best practices for warehouse management?')">
-                            📦 Warehouse Operations
-                        </div>
-                        <div class="example-query" onclick="sendExample('How do I handle supply chain disruptions?')">
-                            ⚠️ Risk Management
-                        </div>
+                        <div class="example-query" onclick="sendExample('What are key supply chain efficiency metrics?')">📊 Key Metrics</div>
+                        <div class="example-query" onclick="sendExample('How can I optimize last-mile delivery?')">🚚 Last-Mile Delivery</div>
+                        <div class="example-query" onclick="sendExample('What are best practices for warehouse management?')">📦 Warehouse Ops</div>
+                        <div class="example-query" onclick="sendExample('How do I handle supply chain disruptions?')">⚠️ Risk Management</div>
                     </div>
                 </div>
-            `;
-            messageCount = 0;
-            
-            // Create new session
-            await createSession();
-            await loadSessionsList();
-        }
+            </div>
+            <div class="typing-indicator" id="typingIndicator">
+                <div class="avatar assistant">AI</div>
+                <div class="typing-dots"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
+            </div>
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <input type="text" id="messageInput" placeholder="Ask about logistics, supply chain, shipping..." onkeypress="handleKeyPress(event)">
+                    <button class="primary" id="sendButton" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
 
-        async function loadSessionsList() {
-            try {
-                const response = await fetch(`${API_URL}/api/sessions`);
-                const data = await response.json();
-                
-                const listContainer = document.getElementById('sessionsList');
-                
-                if (data.sessions.length === 0) {
-                    listContainer.innerHTML = '<div class="no-sessions">No sessions yet</div>';
-                    return;
-                }
-                
-                listContainer.innerHTML = data.sessions
-                    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
-                    .map(session => {
-                        const shortId = session.session_id.substring(0, 8);
-                        const isActive = session.session_id === currentSessionId;
-                        const time = new Date(session.updated_at).toLocaleString();
-                        
-                        return `
-                            <div class="session-item ${isActive ? 'active' : ''}" 
-                                 onclick="switchToSession('${session.session_id}')"
-                                 title="${session.session_id}">
-                                <div class="session-item-id">${shortId}...</div>
-                                <div class="session-item-info">
-                                    ${session.message_count} messages
-                                </div>
-                                <div class="session-item-time">${time}</div>
-                            </div>
-                        `;
-                    }).join('');
-                    
-            } catch (error) {
-                console.error('Error loading sessions:', error);
-            }
-        }
+        <!-- STRUCTURED PANEL -->
+        <div class="panel" id="panel-structured">
+            <div class="structured-body">
+                <div class="structured-card">
+                    <h3>Ask for a structured answer</h3>
+                    <div class="input-wrapper">
+                        <input type="text" id="structuredInput" placeholder="e.g. How should we respond to a port congestion delay?" onkeypress="handleStructuredKeyPress(event)">
+                        <button class="primary" id="structuredButton" onclick="sendStructuredMessage()">Analyze</button>
+                    </div>
+                </div>
+                <div id="structuredOutput">
+                    <p class="empty-hint">Ask a question above to get a summary, key points, recommendations, risks, and a confidence score.</p>
+                </div>
+            </div>
+        </div>
 
-        async function switchToSession(sessionId) {
-            if (sessionId === currentSessionId) {
-                // Just close the dropdown if clicking current session
-                document.getElementById('sessionsList').classList.remove('show');
-                return;
-            }
-            
-            try {
-                // Load session history
-                const response = await fetch(`${API_URL}/api/sessions/${sessionId}/history`);
-                const data = await response.json();
-                
-                // Clear current chat
-                const chatContainer = document.getElementById('chatContainer');
-                chatContainer.innerHTML = '';
-                messageCount = 0;
-                
-                // Load all messages from history
-                data.messages.forEach(msg => {
-                    addMessage(msg.content, msg.role === 'user');
-                });
-                
-                // Update current session
-                currentSessionId = sessionId;
-                const shortId = sessionId.substring(0, 8);
-                document.getElementById('sessionId').textContent = shortId + '...';
-                document.getElementById('sessionId').title = sessionId;
-                
-                // Refresh sessions list to update active marker
-                await loadSessionsList();
-                
-                // Close dropdown
-                document.getElementById('sessionsList').classList.remove('show');
-                
-            } catch (error) {
-                console.error('Error switching session:', error);
-                alert('Failed to load session history');
-            }
-        }
+        <!-- DOCUMENTS PANEL -->
+        <div class="panel" id="panel-documents">
+            <div class="documents-body">
+                <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                    <div class="icon">📤</div>
+                    <strong>Click to upload, or drag &amp; drop</strong>
+                    <p>Supported formats: PDF, TXT, DOCX</p>
+                    <input type="file" id="fileInput" accept=".pdf,.txt,.docx">
+                </div>
 
-        function toggleSessionsList() {
-            const list = document.getElementById('sessionsList');
-            if (list.classList.contains('show')) {
-                list.classList.remove('show');
-            } else {
-                loadSessionsList();
-                list.classList.add('show');
-            }
-        }
+                <div class="doc-stats">
+                    <div class="stat-card"><div class="num" id="statDocs">0</div><div class="label">Documents</div></div>
+                    <div class="stat-card"><div class="num" id="statChunks">0</div><div class="label">Chunks indexed</div></div>
+                </div>
 
-        // Close dropdown when clicking outside
-        document.addEventListener('click', function(event) {
-            const dropdown = document.querySelector('.sessions-dropdown');
-            if (dropdown && !dropdown.contains(event.target)) {
-                document.getElementById('sessionsList').classList.remove('show');
-            }
+                <div class="doc-list" id="docList">
+                    <p class="empty-hint">No documents uploaded yet.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SEARCH PANEL -->
+        <div class="panel" id="panel-search">
+            <div class="search-body">
+                <div class="search-bar">
+                    <input type="text" id="searchInput" placeholder="Ask a question about your uploaded documents..." onkeypress="handleSearchKeyPress(event)">
+                    <select id="searchDocFilter"><option value="">All documents</option></select>
+                    <button class="primary" id="searchButton" onclick="runSearch()">Search</button>
+                </div>
+                <div id="searchResults">
+                    <p class="empty-hint">Upload documents in the Documents tab, then search them semantically here.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_URL = window.location.origin;
+let messageCount = 0;
+let currentSessionId = null;
+
+/* ---------------- Toast ---------------- */
+function showToast(message, isError = false) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.classList.toggle('error', isError);
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2800);
+}
+
+/* ---------------- Tabs ---------------- */
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tab}`));
+    if (tab === 'documents') refreshDocuments();
+    if (tab === 'search') refreshDocumentFilterOptions();
+}
+
+/* ---------------- Status ---------------- */
+async function checkServerStatus() {
+    try {
+        const response = await fetch(`${API_URL}/api/status`);
+        const data = await response.json();
+        document.getElementById('statusText').textContent = `Connected · ${data.model}`;
+        document.getElementById('statusDot').classList.remove('offline');
+    } catch (error) {
+        document.getElementById('statusText').textContent = 'Server offline';
+        document.getElementById('statusDot').classList.add('offline');
+    }
+}
+
+/* ---------------- Chat: sessions ---------------- */
+async function createSession() {
+    try {
+        const response = await fetch(`${API_URL}/api/sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
         });
+        const data = await response.json();
+        currentSessionId = data.session_id;
+        document.getElementById('sessionId').textContent = currentSessionId.substring(0, 8) + '...';
+        document.getElementById('sessionId').title = currentSessionId;
+    } catch (error) {
+        document.getElementById('sessionId').textContent = 'unavailable';
+    }
+}
 
-        async function checkServerStatus() {
-            try {
-                const response = await fetch(`${API_URL}/api/status`);
-                const data = await response.json();
-                document.getElementById('statusText').textContent = `Connected to ${data.model}`;
-            } catch (error) {
-                document.getElementById('statusText').textContent = 'Server offline';
-                document.querySelector('.status-dot').style.background = '#ef4444';
-            }
+async function createNewSession() {
+    document.getElementById('chatContainer').innerHTML = `
+        <div class="welcome-message">
+            <h2>New conversation started</h2>
+            <p>Ask me anything about logistics and supply chain operations.</p>
+        </div>`;
+    messageCount = 0;
+    await createSession();
+    await loadSessionsList();
+}
+
+async function loadSessionsList() {
+    try {
+        const response = await fetch(`${API_URL}/api/sessions`);
+        const data = await response.json();
+        const container = document.getElementById('sessionsList');
+        if (!data.sessions.length) {
+            container.innerHTML = '<div class="session-item">No sessions yet</div>';
+            return;
         }
+        container.innerHTML = data.sessions.map(s => {
+            const isActive = s.session_id === currentSessionId;
+            const time = new Date(s.updated_at).toLocaleString();
+            return `<div class="session-item ${isActive ? 'active' : ''}" onclick="switchToSession('${s.session_id}')">
+                        <div class="session-item-id">${s.session_id.substring(0, 8)}...</div>
+                        <div class="session-item-info">${s.message_count} messages · ${time}</div>
+                    </div>`;
+        }).join('');
+    } catch (error) {
+        console.error('Error loading sessions:', error);
+    }
+}
 
-        function addMessage(text, isUser = false) {
-            const chatContainer = document.getElementById('chatContainer');
-            
-            // Remove welcome message on first interaction
-            if (messageCount === 0) {
-                const welcome = chatContainer.querySelector('.welcome-message');
-                if (welcome) welcome.remove();
-            }
-            messageCount++;
+async function switchToSession(sessionId) {
+    document.getElementById('sessionsList').classList.remove('show');
+    if (sessionId === currentSessionId) return;
+    try {
+        const response = await fetch(`${API_URL}/api/sessions/${sessionId}/history`);
+        const data = await response.json();
+        document.getElementById('chatContainer').innerHTML = '';
+        messageCount = 0;
+        data.messages.forEach(m => addMessage(m.content, m.role === 'user'));
+        currentSessionId = sessionId;
+        document.getElementById('sessionId').textContent = sessionId.substring(0, 8) + '...';
+        document.getElementById('sessionId').title = sessionId;
+        await loadSessionsList();
+    } catch (error) {
+        showToast('Failed to load session history', true);
+    }
+}
 
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
-            
-            const avatar = document.createElement('div');
-            avatar.className = `avatar ${isUser ? 'user' : 'assistant'}`;
-            avatar.textContent = isUser ? 'YOU' : 'AI';
-            
-            const content = document.createElement('div');
-            content.className = 'message-content';
-            content.textContent = text;
-            
-            messageDiv.appendChild(avatar);
-            messageDiv.appendChild(content);
-            chatContainer.appendChild(messageDiv);
-            
-            // Scroll to bottom
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+function toggleSessionsList() {
+    const list = document.getElementById('sessionsList');
+    if (list.classList.contains('show')) {
+        list.classList.remove('show');
+    } else {
+        loadSessionsList();
+        list.classList.add('show');
+    }
+}
+
+document.addEventListener('click', (event) => {
+    const list = document.getElementById('sessionsList');
+    if (list.classList.contains('show') && !event.target.closest('.chat-toolbar') && !event.target.closest('.sessions-panel')) {
+        list.classList.remove('show');
+    }
+});
+
+/* ---------------- Chat: messaging ---------------- */
+function addMessage(text, isUser = false) {
+    const chatContainer = document.getElementById('chatContainer');
+    if (messageCount === 0) {
+        const welcome = chatContainer.querySelector('.welcome-message');
+        if (welcome) welcome.remove();
+    }
+    messageCount++;
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+    messageDiv.innerHTML = `
+        <div class="avatar ${isUser ? 'user' : 'assistant'}">${isUser ? 'YOU' : 'AI'}</div>
+        <div class="message-content"></div>`;
+    messageDiv.querySelector('.message-content').textContent = text;
+    chatContainer.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function showTyping() {
+    document.getElementById('typingIndicator').classList.add('active');
+    const chatContainer = document.getElementById('chatContainer');
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+function hideTyping() { document.getElementById('typingIndicator').classList.remove('active'); }
+
+async function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const sendButton = document.getElementById('sendButton');
+    const message = input.value.trim();
+    if (!message) return;
+
+    input.disabled = true;
+    sendButton.disabled = true;
+    addMessage(message, true);
+    input.value = '';
+    showTyping();
+
+    try {
+        const response = await fetch(`${API_URL}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, session_id: currentSessionId })
+        });
+        if (!response.ok) throw new Error('Server error');
+        const data = await response.json();
+        hideTyping();
+        addMessage(data.response, false);
+        if (document.getElementById('sessionsList').classList.contains('show')) await loadSessionsList();
+    } catch (error) {
+        hideTyping();
+        addMessage('Sorry, I encountered an error. Please make sure the server is running.', false);
+    } finally {
+        input.disabled = false;
+        sendButton.disabled = false;
+        input.focus();
+    }
+}
+
+function sendExample(text) {
+    document.getElementById('messageInput').value = text;
+    sendMessage();
+}
+function handleKeyPress(event) { if (event.key === 'Enter') sendMessage(); }
+
+/* ---------------- Structured tab ---------------- */
+function confidenceClass(score) {
+    if (score >= 0.75) return 'confidence-high';
+    if (score >= 0.45) return 'confidence-mid';
+    return 'confidence-low';
+}
+
+function renderStructuredOutput(output) {
+    const container = document.getElementById('structuredOutput');
+    const pct = Math.round(output.confidence * 100);
+    const listItems = (items, cls = '') => items.length
+        ? `<ul class="pill-list ${cls}">${items.map(() => `<li></li>`).join('')}</ul>`
+        : '<p style="color:var(--text-muted);font-size:13px;">None identified.</p>';
+
+    container.innerHTML = `
+        <div class="structured-card">
+            <h3>Summary</h3>
+            <p style="font-size:14px;line-height:1.6;"></p>
+            <div style="margin-top:12px;">
+                <span class="badge ${confidenceClass(output.confidence)}">Confidence: ${pct}%</span>
+            </div>
+        </div>
+        <div class="structured-card">
+            <h3>Key Points</h3>
+            <div data-slot="key_points"></div>
+        </div>
+        <div class="structured-card">
+            <h3>Recommendations</h3>
+            <div data-slot="recommendations"></div>
+        </div>
+        <div class="structured-card">
+            <h3>Risks</h3>
+            <div data-slot="risks"></div>
+        </div>`;
+
+    container.querySelector('p').textContent = output.summary;
+    container.querySelector('[data-slot="key_points"]').innerHTML = listItems(output.key_points);
+    container.querySelector('[data-slot="recommendations"]').innerHTML = listItems(output.recommendations);
+    container.querySelector('[data-slot="risks"]').innerHTML = listItems(output.risks, 'risks');
+
+    // Fill text via textContent (avoids HTML injection from model output)
+    ['key_points', 'recommendations', 'risks'].forEach(field => {
+        const items = output[field];
+        const lis = container.querySelectorAll(`[data-slot="${field}"] li`);
+        items.forEach((text, i) => { if (lis[i]) lis[i].textContent = text; });
+    });
+}
+
+async function sendStructuredMessage() {
+    const input = document.getElementById('structuredInput');
+    const button = document.getElementById('structuredButton');
+    const message = input.value.trim();
+    if (!message) return;
+
+    input.disabled = true;
+    button.disabled = true;
+    button.textContent = 'Analyzing...';
+    document.getElementById('structuredOutput').innerHTML = '<p class="empty-hint">Thinking...</p>';
+
+    try {
+        const response = await fetch(`${API_URL}/api/chat/structured`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message })
+        });
+        if (!response.ok) throw new Error('Server error');
+        const data = await response.json();
+        renderStructuredOutput(data.output);
+    } catch (error) {
+        document.getElementById('structuredOutput').innerHTML = '<p class="empty-hint">Something went wrong. Please try again.</p>';
+        showToast('Structured request failed', true);
+    } finally {
+        input.disabled = false;
+        button.disabled = false;
+        button.textContent = 'Analyze';
+    }
+}
+function handleStructuredKeyPress(event) { if (event.key === 'Enter') sendStructuredMessage(); }
+
+/* ---------------- Documents tab ---------------- */
+async function refreshDocuments() {
+    try {
+        const [docsRes, statsRes] = await Promise.all([
+            fetch(`${API_URL}/api/documents`),
+            fetch(`${API_URL}/api/documents/stats`)
+        ]);
+        const docsData = await docsRes.json();
+        const statsData = await statsRes.json();
+
+        document.getElementById('statDocs').textContent = statsData.total_documents;
+        document.getElementById('statChunks').textContent = statsData.total_chunks;
+
+        const docList = document.getElementById('docList');
+        if (!docsData.documents.length) {
+            docList.innerHTML = '<p class="empty-hint">No documents uploaded yet.</p>';
+            return;
         }
+        docList.innerHTML = docsData.documents.map(doc => `
+            <div class="doc-item">
+                <div class="doc-item-info">
+                    <div class="doc-icon">📄</div>
+                    <div>
+                        <div class="doc-name"></div>
+                        <div class="doc-meta">${doc.total_chunks} chunks</div>
+                    </div>
+                </div>
+                <button class="icon-btn" onclick="deleteDocument('${doc.document_id}')" title="Delete">🗑️</button>
+            </div>
+        `).join('');
+        docList.querySelectorAll('.doc-name').forEach((el, i) => { el.textContent = docsData.documents[i].filename; });
+    } catch (error) {
+        showToast('Failed to load documents', true);
+    }
+}
 
-        function showTyping() {
-            document.getElementById('typingIndicator').classList.add('active');
-            const chatContainer = document.getElementById('chatContainer');
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+async function uploadFile(file) {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    showToast(`Uploading ${file.name}...`);
+    try {
+        const response = await fetch(`${API_URL}/api/documents/upload`, { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Upload failed');
+        showToast(`Indexed ${data.filename} (${data.chunks_created} chunks)`);
+        await refreshDocuments();
+    } catch (error) {
+        showToast(error.message, true);
+    }
+}
+
+async function deleteDocument(documentId) {
+    try {
+        const response = await fetch(`${API_URL}/api/documents/${documentId}`, { method: 'DELETE' });
+        if (!response.ok && response.status !== 204) throw new Error('Delete failed');
+        showToast('Document deleted');
+        await refreshDocuments();
+    } catch (error) {
+        showToast('Failed to delete document', true);
+    }
+}
+
+document.getElementById('fileInput').addEventListener('change', (e) => uploadFile(e.target.files[0]));
+
+const uploadZone = document.getElementById('uploadZone');
+['dragenter', 'dragover'].forEach(evt => uploadZone.addEventListener(evt, (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); }));
+['dragleave', 'drop'].forEach(evt => uploadZone.addEventListener(evt, (e) => { e.preventDefault(); uploadZone.classList.remove('dragover'); }));
+uploadZone.addEventListener('drop', (e) => { if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]); });
+
+/* ---------------- Search tab ---------------- */
+async function refreshDocumentFilterOptions() {
+    try {
+        const response = await fetch(`${API_URL}/api/documents`);
+        const data = await response.json();
+        const select = document.getElementById('searchDocFilter');
+        select.innerHTML = '<option value="">All documents</option>' +
+            data.documents.map(d => `<option value="${d.document_id}"></option>`).join('');
+        const options = select.querySelectorAll('option[value]:not([value=""])');
+        options.forEach((opt, i) => { opt.textContent = data.documents[i].filename; });
+    } catch (error) {
+        // silent — search still works without the filter populated
+    }
+}
+
+function scoreClass(score) {
+    if (score >= 0.7) return 'score-high';
+    if (score >= 0.4) return 'score-mid';
+    return 'score-low';
+}
+
+async function runSearch() {
+    const input = document.getElementById('searchInput');
+    const button = document.getElementById('searchButton');
+    const documentId = document.getElementById('searchDocFilter').value;
+    const query = input.value.trim();
+    if (!query) return;
+
+    button.disabled = true;
+    button.textContent = 'Searching...';
+    document.getElementById('searchResults').innerHTML = '<p class="empty-hint">Searching...</p>';
+
+    try {
+        const response = await fetch(`${API_URL}/api/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, top_k: 5, document_id: documentId || null })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Search failed');
+
+        const container = document.getElementById('searchResults');
+        if (!data.results.length) {
+            container.innerHTML = '<p class="empty-hint">No matching chunks found. Try uploading a document first.</p>';
+            return;
         }
+        container.innerHTML = data.results.map(() => `
+            <div class="search-result">
+                <div class="search-result-head">
+                    <span class="search-result-source"></span>
+                    <span class="score-badge"></span>
+                </div>
+                <div class="search-result-text"></div>
+            </div>
+        `).join('');
+        const cards = container.querySelectorAll('.search-result');
+        data.results.forEach((r, i) => {
+            const card = cards[i];
+            card.querySelector('.search-result-source').textContent = `📄 ${r.filename}`;
+            const badge = card.querySelector('.score-badge');
+            badge.textContent = `${(r.score * 100).toFixed(0)}% match`;
+            badge.classList.add(scoreClass(r.score));
+            card.querySelector('.search-result-text').textContent = r.text;
+        });
+    } catch (error) {
+        document.getElementById('searchResults').innerHTML = '<p class="empty-hint">Search failed. Please try again.</p>';
+        showToast(error.message, true);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Search';
+    }
+}
+function handleSearchKeyPress(event) { if (event.key === 'Enter') runSearch(); }
 
-        function hideTyping() {
-            document.getElementById('typingIndicator').classList.remove('active');
-        }
-
-        async function sendMessage() {
-            const input = document.getElementById('messageInput');
-            const sendButton = document.getElementById('sendButton');
-            const message = input.value.trim();
-            
-            if (!message) return;
-            
-            // Disable input
-            input.disabled = true;
-            sendButton.disabled = true;
-            
-            // Add user message
-            addMessage(message, true);
-            input.value = '';
-            
-            // Show typing indicator
-            showTyping();
-            
-            try {
-                const response = await fetch(`${API_URL}/api/chat`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ 
-                        message: message,
-                        session_id: currentSessionId
-                    })
-                });
-                
-                if (!response.ok) {
-                    throw new Error('Server error');
-                }
-                
-                const data = await response.json();
-                
-                // Hide typing and add assistant response
-                hideTyping();
-                addMessage(data.response, false);
-                
-                // Update sessions list (message count changed)
-                if (document.getElementById('sessionsList').classList.contains('show')) {
-                    await loadSessionsList();
-                }
-                
-            } catch (error) {
-                hideTyping();
-                addMessage('Sorry, I encountered an error. Please make sure the server is running.', false);
-                console.error('Error:', error);
-            } finally {
-                // Re-enable input
-                input.disabled = false;
-                sendButton.disabled = false;
-                input.focus();
-            }
-        }
-
-        function sendExample(text) {
-            document.getElementById('messageInput').value = text;
-            sendMessage();
-        }
-
-        function handleKeyPress(event) {
-            if (event.key === 'Enter') {
-                sendMessage();
-            }
-        }
-
-        // Check server status on load
-        checkServerStatus();
-        
-        // Create initial session and load sessions list
-        createSession().then(() => loadSessionsList());
-        
-        // Focus input on load
-        document.getElementById('messageInput').focus();
-    </script>
+/* ---------------- Init ---------------- */
+checkServerStatus();
+createSession().then(() => loadSessionsList());
+document.getElementById('messageInput').focus();
+</script>
 </body>
 </html>

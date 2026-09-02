@@ -39,3 +39,6 @@ logs/
 build/
 dist/
 *.egg-info/
+
+# Data & Vector Store
+data/

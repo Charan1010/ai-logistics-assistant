@@ -43,18 +43,18 @@ def test_chat_endpoint_valid_message(mock_chat):
     """Test chat endpoint with a valid message (mocked LLM)."""
     # Mock the LLM response
     mock_chat.return_value = "This is a test response about supply chain metrics."
-    
+
     response = client.post(
         "/api/chat",
         json={"message": "What are key supply chain metrics?"}
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert "response" in data
     assert "model" in data
     assert data["response"] == "This is a test response about supply chain metrics."
-    
+
     # Verify LLM was called with correct structure
     mock_chat.assert_called_once()
     call_args = mock_chat.call_args[0][0]
@@ -96,13 +96,13 @@ def test_chat_endpoint_invalid_json():
 def test_chat_endpoint_long_message(mock_chat):
     """Test chat endpoint with a long message."""
     mock_chat.return_value = "Response to long message."
-    
+
     long_message = "How can I optimize " + "operations " * 100
     response = client.post(
         "/api/chat",
         json={"message": long_message}
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert "response" in data
@@ -154,7 +154,7 @@ def test_structured_chat_endpoint_fallback_on_invalid_json(mock_chat):
 def test_create_session():
     """Test creating a new session."""
     response = client.post("/api/sessions", json={})
-    
+
     assert response.status_code == 201
     data = response.json()
     assert "session_id" in data
@@ -169,7 +169,7 @@ def test_create_session_with_metadata():
         "/api/sessions",
         json={"metadata": {"user": "test_user", "department": "logistics"}}
     )
-    
+
     assert response.status_code == 201
     data = response.json()
     assert data["metadata"]["user"] == "test_user"
@@ -181,9 +181,9 @@ def test_list_sessions():
     # Create a few sessions
     client.post("/api/sessions", json={})
     client.post("/api/sessions", json={})
-    
+
     response = client.get("/api/sessions")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 2
@@ -195,10 +195,10 @@ def test_get_session():
     # Create a session
     create_response = client.post("/api/sessions", json={})
     session_id = create_response.json()["session_id"]
-    
+
     # Get session details
     response = client.get(f"/api/sessions/{session_id}")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["session_id"] == session_id
@@ -215,21 +215,21 @@ def test_get_nonexistent_session():
 def test_chat_with_session(mock_chat):
     """Test chat endpoint with session support."""
     mock_chat.return_value = "Delivery times depend on several factors..."
-    
+
     # Create a session
     create_response = client.post("/api/sessions", json={})
     session_id = create_response.json()["session_id"]
-    
+
     # Send a message with session
     response = client.post(
         "/api/chat",
         json={"message": "What affects delivery times?", "session_id": session_id}
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert "response" in data
-    
+
     # Verify message was stored in session
     history_response = client.get(f"/api/sessions/{session_id}/history")
     history = history_response.json()
@@ -245,23 +245,23 @@ def test_multi_turn_conversation(mock_chat):
         "First response",
         "Second response that references context"
     ]
-    
+
     # Create session
     create_response = client.post("/api/sessions", json={})
     session_id = create_response.json()["session_id"]
-    
+
     # First message
     client.post(
         "/api/chat",
         json={"message": "What are KPIs?", "session_id": session_id}
     )
-    
+
     # Second message (should have context from first)
     client.post(
         "/api/chat",
         json={"message": "Give me examples", "session_id": session_id}
     )
-    
+
     # Verify both exchanges are in history
     history_response = client.get(f"/api/sessions/{session_id}/history")
     history = history_response.json()
@@ -282,15 +282,15 @@ def test_get_session_history():
     # Create session and add messages
     create_response = client.post("/api/sessions", json={})
     session_id = create_response.json()["session_id"]
-    
+
     # Manually add some messages to session for testing
     from app.session_store import session_store
     session_store.add_message(session_id, "user", "Hello")
     session_store.add_message(session_id, "assistant", "Hi there!")
-    
+
     # Get history
     response = client.get(f"/api/sessions/{session_id}/history")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 2
@@ -303,15 +303,15 @@ def test_get_history_with_limit():
     # Create session
     create_response = client.post("/api/sessions", json={})
     session_id = create_response.json()["session_id"]
-    
+
     # Add multiple messages
     from app.session_store import session_store
     for i in range(5):
         session_store.add_message(session_id, "user", f"Message {i}")
-    
+
     # Get limited history
     response = client.get(f"/api/sessions/{session_id}/history?limit=2")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 2  # Only last 2 messages
@@ -322,11 +322,11 @@ def test_delete_session():
     # Create session
     create_response = client.post("/api/sessions", json={})
     session_id = create_response.json()["session_id"]
-    
+
     # Delete it
     response = client.delete(f"/api/sessions/{session_id}")
     assert response.status_code == 204
-    
+
     # Verify it's gone
     get_response = client.get(f"/api/sessions/{session_id}")
     assert get_response.status_code == 404
@@ -336,3 +336,255 @@ def test_delete_nonexistent_session():
     """Test deleting a session that doesn't exist."""
     response = client.delete("/api/sessions/nonexistent")
     assert response.status_code == 404
+
+
+# Feature 4: Document Ingestion Tests
+
+@pytest.fixture
+def cleanup_documents():
+    """Clean up test documents after tests."""
+    yield
+    # Clean up vector store and uploaded files
+    from app.vector_store import get_vector_store
+    from pathlib import Path
+
+    vector_store = get_vector_store()
+    docs = vector_store.list_documents()
+    for doc in docs:
+        vector_store.delete_document(doc["document_id"])
+
+    # Clean up uploaded files
+    upload_dir = Path("./data/uploads")
+    if upload_dir.exists():
+        for file in upload_dir.glob("*"):
+            if file.is_file():
+                file.unlink()
+
+
+def test_upload_txt_document(cleanup_documents):
+    """Test uploading a text document."""
+    # Create a test text file
+    test_content = b"This is a test document about logistics. It contains information about supply chain management and warehouse operations."
+
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("test.txt", test_content, "text/plain")}
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert "document_id" in data
+    assert data["filename"] == "test.txt"
+    assert data["file_type"] == "txt"
+    assert data["chunks_created"] > 0
+
+
+def test_upload_unsupported_file_type(cleanup_documents):
+    """Test uploading an unsupported file type."""
+    test_content = b"fake image content"
+
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("test.jpg", test_content, "image/jpeg")}
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported file type" in response.json()["detail"]
+
+
+def test_list_documents(cleanup_documents):
+    """Test listing all documents."""
+    # Upload a document first
+    test_content = b"Test document content for listing."
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("test.txt", test_content, "text/plain")}
+    )
+
+    # List documents
+    response = client.get("/api/documents")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] >= 1
+    assert len(data["documents"]) >= 1
+    assert "document_id" in data["documents"][0]
+    assert "filename" in data["documents"][0]
+
+
+def test_get_document_details(cleanup_documents):
+    """Test getting details for a specific document."""
+    # Upload a document
+    test_content = b"Test document for retrieval."
+    upload_response = client.post(
+        "/api/documents/upload",
+        files={"file": ("test.txt", test_content, "text/plain")}
+    )
+    document_id = upload_response.json()["document_id"]
+
+    # Get document details
+    response = client.get(f"/api/documents/{document_id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["document_id"] == document_id
+    assert data["filename"] == "test.txt"
+    assert data["total_chunks"] > 0
+
+
+def test_get_nonexistent_document():
+    """Test getting a document that doesn't exist."""
+    response = client.get("/api/documents/nonexistent-id")
+    assert response.status_code == 404
+
+
+def test_get_document_chunks(cleanup_documents):
+    """Test getting chunks for a document."""
+    # Upload a document
+    test_content = b"Test document with multiple sentences. This is the second sentence. And this is the third one."
+    upload_response = client.post(
+        "/api/documents/upload",
+        files={"file": ("test.txt", test_content, "text/plain")}
+    )
+    document_id = upload_response.json()["document_id"]
+
+    # Get chunks
+    response = client.get(f"/api/documents/{document_id}/chunks")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["document_id"] == document_id
+    assert data["total"] > 0
+    assert len(data["chunks"]) > 0
+    assert "text" in data["chunks"][0]
+    assert "chunk_index" in data["chunks"][0]
+
+
+def test_delete_document(cleanup_documents):
+    """Test deleting a document."""
+    # Upload a document
+    test_content = b"Test document for deletion."
+    upload_response = client.post(
+        "/api/documents/upload",
+        files={"file": ("test.txt", test_content, "text/plain")}
+    )
+    document_id = upload_response.json()["document_id"]
+
+    # Delete it
+    response = client.delete(f"/api/documents/{document_id}")
+    assert response.status_code == 204
+
+    # Verify it's gone
+    get_response = client.get(f"/api/documents/{document_id}")
+    assert get_response.status_code == 404
+
+
+def test_delete_nonexistent_document():
+    """Test deleting a document that doesn't exist."""
+    response = client.delete("/api/documents/nonexistent-id")
+    assert response.status_code == 404
+
+
+def test_vector_store_stats(cleanup_documents):
+    """Test getting vector store statistics."""
+    # Upload a document
+    test_content = b"Test document for stats."
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("test.txt", test_content, "text/plain")}
+    )
+
+    # Get stats
+    response = client.get("/api/documents/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "total_documents" in data
+    assert "total_chunks" in data
+    assert "collection_name" in data
+    assert data["total_documents"] >= 1
+
+
+# Feature 5: Semantic Search Tests
+
+def test_search_returns_ranked_results(cleanup_documents):
+    """Test that search returns semantically relevant chunks with scores."""
+    test_content = (
+        b"On-time delivery rate is a key supply chain KPI. "
+        b"Warehouse throughput measures efficiency of storage operations."
+    )
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("kpis.txt", test_content, "text/plain")}
+    )
+
+    response = client.post(
+        "/api/search",
+        json={"query": "What metrics matter for shipping performance?", "top_k": 3}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["query"] == "What metrics matter for shipping performance?"
+    assert data["total"] >= 1
+    assert len(data["results"]) >= 1
+
+    top_result = data["results"][0]
+    assert "text" in top_result
+    assert "chunk_id" in top_result
+    assert "document_id" in top_result
+    assert "filename" in top_result
+    assert 0.0 <= top_result["score"] <= 1.0
+
+
+def test_search_scoped_to_document(cleanup_documents):
+    """Test that document_id scopes search results to a single document."""
+    upload_a = client.post(
+        "/api/documents/upload",
+        files={"file": ("doc_a.txt", b"Warehouse automation reduces picking errors.", "text/plain")}
+    )
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("doc_b.txt", b"Ocean freight rates fluctuate with fuel costs.", "text/plain")}
+    )
+    doc_a_id = upload_a.json()["document_id"]
+
+    response = client.post(
+        "/api/search",
+        json={"query": "warehouse", "top_k": 5, "document_id": doc_a_id}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    for result in data["results"]:
+        assert result["document_id"] == doc_a_id
+
+
+def test_search_empty_query_returns_422():
+    """Test that an empty query is rejected by validation."""
+    response = client.post("/api/search", json={"query": "", "top_k": 3})
+    assert response.status_code == 422
+
+
+def test_search_with_no_documents_returns_empty(cleanup_documents):
+    """Test that searching with an empty vector store returns no results (not an error)."""
+    response = client.post("/api/search", json={"query": "anything at all", "top_k": 3})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 0
+    assert data["results"] == []
+
+
+def test_search_stats_endpoint(cleanup_documents):
+    """Test the /api/search/stats alias endpoint."""
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("stats_doc.txt", b"Freight consolidation lowers per-unit shipping cost.", "text/plain")}
+    )
+
+    response = client.get("/api/search/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_documents"] >= 1
+    assert data["total_chunks"] >= 1
