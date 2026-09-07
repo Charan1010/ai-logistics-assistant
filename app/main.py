@@ -32,6 +32,9 @@ from app.models import (
     SearchRequest,
     SearchResult,
     SearchResponse,
+    QueryClassification,
+    SmartChatRequest,
+    SmartChatResponse,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -99,6 +102,32 @@ Rules:
 """
 
 
+QUERY_CLASSIFICATION_PROMPT = """You are a routing classifier for a logistics AI assistant.
+
+Decide whether the user's question needs uploaded document context before answering.
+
+Return ONLY valid JSON with this exact schema:
+{
+    "needs_retrieval": true,
+    "confidence": 0.0,
+    "query_type": "general"
+}
+
+query_type must be exactly one of:
+- "general": common knowledge or broad logistics concepts that do not require uploaded documents
+- "domain": asks about company/domain-specific policies, metrics, uploaded procedures, contracts, rates, or operational details
+- "professional_document": asks about a financial, legal, compliance, regulatory, or complex technical document
+- "ambiguous": unclear whether uploaded documents are needed
+
+Rules:
+- Use needs_retrieval=false for general knowledge questions.
+- Use needs_retrieval=true for questions about uploaded documents, internal policies, specific company data, or named files.
+- Use query_type="ambiguous" with low confidence if the request is vague.
+- confidence must be between 0 and 1.
+- No markdown. No extra keys.
+"""
+
+
 def _extract_json_object(raw_text: str) -> dict:
     """Extract and parse the first JSON object from model output."""
     text = raw_text.strip()
@@ -136,6 +165,82 @@ def _fallback_structured_answer(raw_text: str) -> StructuredAnswer:
     )
 
 
+def _fallback_query_classification() -> QueryClassification:
+    """Return the conservative route when classification fails."""
+    return QueryClassification(
+        needs_retrieval=True,
+        confidence=0.3,
+        query_type="ambiguous",
+    )
+
+
+async def classify_query(message: str) -> QueryClassification:
+    """Classify whether a user question needs retrieved document context."""
+    messages = [
+        {"role": "system", "content": QUERY_CLASSIFICATION_PROMPT},
+        {"role": "user", "content": message},
+    ]
+
+    try:
+        response_text = await llm_client.chat(messages)
+        payload = _extract_json_object(response_text)
+        return QueryClassification.model_validate(payload)
+    except Exception:
+        return _fallback_query_classification()
+
+
+def _format_retrieved_context(results: list[SearchResult]) -> str:
+    """Format retrieved chunks for the answer-generation prompt."""
+    if not results:
+        return "No relevant document chunks were found."
+
+    sections = []
+    for index, result in enumerate(results, start=1):
+        sections.append(
+            f"[Chunk {index} | file={result.filename} | score={result.score}]\n{result.text}"
+        )
+    return "\n\n".join(sections)
+
+
+def _history_messages_for_session(session_id: str | None) -> list[dict]:
+    """Return prior session turns in chat-message format."""
+    if not session_id:
+        return []
+
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    return [
+        {"role": msg.role, "content": msg.content}
+        for msg in session.messages[-20:]
+    ]
+
+
+def _search_document_context(message: str, top_k: int, document_id: str | None) -> list[SearchResult]:
+    """Run vector retrieval and return API-shaped search results."""
+    embedding_model = get_embedding_model()
+    query_embedding = embedding_model.embed_text(message)
+    vector_store = get_vector_store()
+    ranked = vector_store.search_ranked(
+        query_embedding,
+        n_results=top_k,
+        document_id=document_id,
+    )
+
+    return [
+        SearchResult(
+            chunk_id=r["chunk_id"],
+            text=r["text"],
+            score=r["score"],
+            document_id=r["metadata"].get("document_id", ""),
+            filename=r["metadata"].get("filename", ""),
+            chunk_index=r["metadata"].get("chunk_index", 0),
+        )
+        for r in ranked
+    ]
+
+
 @app.get("/")
 async def root():
     """Serve the web UI."""
@@ -158,7 +263,7 @@ async def status():
         "status": "online",
         "app": settings.app_name,
         "version": "0.1.0",
-        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion", "semantic_search"],
+        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion", "semantic_search", "smart_router"],
         "model": llm_client.model
     }
 
@@ -611,6 +716,89 @@ async def search_stats():
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving stats: {str(e)}"
+        )
+
+
+# Smart Router Endpoint (Feature 6)
+
+@app.post("/api/chat/smart", response_model=SmartChatResponse)
+async def smart_chat(request: SmartChatRequest):
+    """
+    Route a question through LLM-only, RAG, or hybrid answering.
+
+    The router first classifies the query. Confident general questions skip
+    retrieval; confident document-dependent questions use RAG; uncertain cases
+    use hybrid retrieval so the LLM can use context if it helps.
+    """
+    try:
+        classification = await classify_query(request.message)
+
+        if classification.confidence > 0.6 and not classification.needs_retrieval:
+            source = "llm"
+        elif classification.confidence > 0.6 and classification.needs_retrieval:
+            source = "rag"
+        else:
+            source = "hybrid"
+
+        retrieved_results: list[SearchResult] = []
+        if source in ("rag", "hybrid"):
+            retrieved_results = _search_document_context(
+                request.message,
+                top_k=request.top_k,
+                document_id=request.document_id,
+            )
+
+        history_messages = _history_messages_for_session(request.session_id)
+
+        if source == "llm":
+            generation_system_prompt = SYSTEM_PROMPT
+            retrieval_method = "LLM direct: router classified this as answerable without uploaded documents."
+        else:
+            context = _format_retrieved_context(retrieved_results)
+            path_label = "RAG" if source == "rag" else "Hybrid"
+            generation_system_prompt = f"""{SYSTEM_PROMPT}
+
+Use the retrieved document context below when it directly helps answer the user.
+If the context does not contain the answer, say what is missing and answer only from general logistics knowledge where appropriate.
+
+Retrieved context:
+{context}"""
+            retrieval_method = (
+                f"{path_label}: router confidence={classification.confidence:.2f}; "
+                f"retrieved {len(retrieved_results)} chunk(s) using vector similarity."
+            )
+
+        messages = [{"role": "system", "content": generation_system_prompt}]
+        messages.extend(history_messages)
+        messages.append({"role": "user", "content": request.message})
+
+        answer = await llm_client.chat(messages)
+
+        if request.session_id:
+            session_store.add_message(request.session_id, "user", request.message)
+            session_store.add_message(request.session_id, "assistant", answer)
+
+        return SmartChatResponse(
+            answer=answer,
+            source=source,
+            chunks_used=len(retrieved_results),
+            confidence=classification.confidence,
+            retrieval_method=retrieval_method,
+            classification=classification,
+            model=llm_client.model,
+        )
+
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM service unavailable: {str(e)}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error in smart router: {str(e)}"
         )
 
 

@@ -189,6 +189,14 @@
     .pill-list.risks li { border-left-color: var(--danger); }
     .empty-hint { color: var(--text-muted); text-align: center; padding: 60px 20px; font-size: 14px; }
 
+    /* ---- Smart Router panel ---- */
+    .smart-body { padding: 24px; overflow-y: auto; flex: 1; background: var(--bg); }
+    .audit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+    .audit-item { background: #f8fafc; border-radius: 12px; padding: 12px; border: 1px solid var(--border); }
+    .audit-item .label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .audit-item .value { color: var(--text); font-size: 15px; font-weight: 800; margin-top: 5px; }
+    .source-badge { display: inline-block; padding: 5px 11px; border-radius: 999px; background: #eef2ff; color: var(--primary); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+
     /* ---- Documents panel ---- */
     .documents-body { padding: 24px; overflow-y: auto; flex: 1; background: var(--bg); }
     .upload-zone {
@@ -251,6 +259,7 @@
         <div class="tabs">
             <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Chat</button>
             <button class="tab-btn" data-tab="structured" onclick="switchTab('structured')">📋 Structured</button>
+            <button class="tab-btn" data-tab="smart" onclick="switchTab('smart')">🧭 Smart</button>
             <button class="tab-btn" data-tab="documents" onclick="switchTab('documents')">📄 Documents</button>
             <button class="tab-btn" data-tab="search" onclick="switchTab('search')">🔍 Search</button>
         </div>
@@ -304,6 +313,23 @@
                 </div>
                 <div id="structuredOutput">
                     <p class="empty-hint">Ask a question above to get a summary, key points, recommendations, risks, and a confidence score.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SMART ROUTER PANEL -->
+        <div class="panel" id="panel-smart">
+            <div class="smart-body">
+                <div class="structured-card">
+                    <h3>Smart routed answer</h3>
+                    <div class="input-wrapper">
+                        <input type="text" id="smartInput" placeholder="Ask anything — router decides LLM, RAG, or hybrid..." onkeypress="handleSmartKeyPress(event)">
+                        <select id="smartDocFilter"><option value="">All documents</option></select>
+                        <button class="primary" id="smartButton" onclick="sendSmartMessage()">Route</button>
+                    </div>
+                </div>
+                <div id="smartOutput">
+                    <p class="empty-hint">Ask a question to see the router decision, answer source, chunks used, and confidence.</p>
                 </div>
             </div>
         </div>
@@ -367,6 +393,7 @@ function switchTab(tab) {
     document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tab}`));
     if (tab === 'documents') refreshDocuments();
     if (tab === 'search') refreshDocumentFilterOptions();
+    if (tab === 'smart') refreshSmartDocumentFilterOptions();
 }
 
 /* ---------------- Status ---------------- */
@@ -609,6 +636,87 @@ async function sendStructuredMessage() {
     }
 }
 function handleStructuredKeyPress(event) { if (event.key === 'Enter') sendStructuredMessage(); }
+
+/* ---------------- Smart Router tab ---------------- */
+async function refreshSmartDocumentFilterOptions() {
+    try {
+        const response = await fetch(`${API_URL}/api/documents`);
+        const data = await response.json();
+        const select = document.getElementById('smartDocFilter');
+        select.innerHTML = '<option value="">All documents</option>' +
+            data.documents.map(d => `<option value="${d.document_id}"></option>`).join('');
+        const options = select.querySelectorAll('option[value]:not([value=""])');
+        options.forEach((opt, i) => { opt.textContent = data.documents[i].filename; });
+    } catch (error) {
+        // keep smart chat usable even if document filters cannot load
+    }
+}
+
+function renderSmartOutput(data) {
+    const container = document.getElementById('smartOutput');
+    const pct = Math.round(data.confidence * 100);
+
+    container.innerHTML = `
+        <div class="structured-card">
+            <h3>Answer</h3>
+            <p data-slot="answer" style="font-size:14px;line-height:1.6;white-space:pre-wrap;"></p>
+            <div class="audit-grid">
+                <div class="audit-item"><div class="label">Source</div><div class="value"><span class="source-badge" data-slot="source"></span></div></div>
+                <div class="audit-item"><div class="label">Confidence</div><div class="value" data-slot="confidence"></div></div>
+                <div class="audit-item"><div class="label">Chunks Used</div><div class="value" data-slot="chunks"></div></div>
+                <div class="audit-item"><div class="label">Query Type</div><div class="value" data-slot="query_type"></div></div>
+            </div>
+        </div>
+        <div class="structured-card">
+            <h3>Router Audit Trail</h3>
+            <p data-slot="method" style="font-size:13px;line-height:1.6;color:var(--text-muted);"></p>
+        </div>`;
+
+    container.querySelector('[data-slot="answer"]').textContent = data.answer;
+    container.querySelector('[data-slot="source"]').textContent = data.source;
+    container.querySelector('[data-slot="confidence"]').textContent = `${pct}%`;
+    container.querySelector('[data-slot="chunks"]').textContent = data.chunks_used;
+    container.querySelector('[data-slot="query_type"]').textContent = data.classification.query_type;
+    container.querySelector('[data-slot="method"]').textContent = data.retrieval_method;
+}
+
+async function sendSmartMessage() {
+    const input = document.getElementById('smartInput');
+    const button = document.getElementById('smartButton');
+    const documentId = document.getElementById('smartDocFilter').value;
+    const message = input.value.trim();
+    if (!message) return;
+
+    input.disabled = true;
+    button.disabled = true;
+    button.textContent = 'Routing...';
+    document.getElementById('smartOutput').innerHTML = '<p class="empty-hint">Classifying query and choosing a route...</p>';
+
+    try {
+        const response = await fetch(`${API_URL}/api/chat/smart`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message,
+                session_id: currentSessionId,
+                top_k: 3,
+                document_id: documentId || null
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Smart router failed');
+        renderSmartOutput(data);
+        await loadSessionsList();
+    } catch (error) {
+        document.getElementById('smartOutput').innerHTML = '<p class="empty-hint">Smart router failed. Please try again.</p>';
+        showToast(error.message, true);
+    } finally {
+        input.disabled = false;
+        button.disabled = false;
+        button.textContent = 'Route';
+    }
+}
+function handleSmartKeyPress(event) { if (event.key === 'Enter') sendSmartMessage(); }
 
 /* ---------------- Documents tab ---------------- */
 async function refreshDocuments() {

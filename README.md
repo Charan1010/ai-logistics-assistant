@@ -22,7 +22,7 @@ Executive-level AI assistant that understands logistics operations, provides rea
 ### Phase 3: Knowledge ✅ (in progress)
 - [x] **Feature 4: Document Ingestion** - Upload PDF/TXT/DOCX, sentence-aware chunking, local embeddings, ChromaDB storage
 - [x] **Feature 5: Semantic Search** - Vector similarity search over indexed chunks with 0.0-1.0 relevance scores
-- [ ] **Feature 6: Smart Routing** - Intent-based query routing
+- [x] **Feature 6: Smart Routing** - LLM/RAG/hybrid route selection with transparent audit trail
 
 ### Phase 4: Intelligence (Planned)
 - [ ] **Feature 7: Basic Agent** - Function calling and tool use
@@ -48,10 +48,10 @@ ai-logistics-assistant/
 │   ├── embeddings.py          # Local sentence-transformers embedding model (Feature 4/5)
 │   └── vector_store.py        # ChromaDB storage + ranked similarity search (Feature 4/5)
 ├── ui/
-│   └── index.html             # Tabbed web UI: Chat, Structured, Documents, Search
+│   └── index.html             # Tabbed web UI: Chat, Structured, Smart, Documents, Search
 ├── tests/
 │   ├── conftest.py            # Offline/SSL env setup for tests
-│   └── test_api.py            # API tests (35 tests across all features)
+│   └── test_api.py            # API tests (40 tests across all features)
 ├── data/
 │   ├── chroma/                # Persisted vector DB (gitignored)
 │   └── uploads/                # Uploaded source files (gitignored)
@@ -94,8 +94,9 @@ uvicorn app.main:app --reload --port 8000
 1. **Open your browser** and go to `http://localhost:8000`
 2. **Chat tab** - ask questions, sessions are tracked automatically; use History to revisit past conversations
 3. **Structured tab** - get a schema-validated summary/key-points/recommendations/risks/confidence breakdown
-4. **Documents tab** - drag-and-drop or click to upload PDF/TXT/DOCX files; view live chunk/document counts
-5. **Search tab** - ask a question and get ranked, scored chunks from your uploaded documents (optionally scoped to one document)
+4. **Smart tab** - ask a question and let the router choose LLM-only, RAG, or hybrid with an audit trail
+5. **Documents tab** - drag-and-drop or click to upload PDF/TXT/DOCX files; view live chunk/document counts
+6. **Search tab** - ask a question and get ranked, scored chunks from your uploaded documents (optionally scoped to one document)
 
 ### Using the API 🔌
 
@@ -137,6 +138,11 @@ curl -X POST http://localhost:8000/api/search \
 
 # Vector store stats
 curl http://localhost:8000/api/documents/stats
+
+# Smart routed chat (Feature 6)
+curl -X POST http://localhost:8000/api/chat/smart \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Does this question need our uploaded documents?", "top_k": 3}'
 ```
 
 Structured response shape:
@@ -149,6 +155,24 @@ Structured response shape:
     "recommendations": ["..."],
     "risks": ["..."],
     "confidence": 0.0
+  },
+  "model": "qwen2.5:3b"
+}
+```
+
+Smart response shape:
+
+```json
+{
+  "answer": "...",
+  "source": "llm | rag | hybrid | pageindex",
+  "chunks_used": 0,
+  "confidence": 0.0,
+  "retrieval_method": "...",
+  "classification": {
+    "needs_retrieval": true,
+    "confidence": 0.0,
+    "query_type": "general | domain | professional_document | ambiguous"
   },
   "model": "qwen2.5:3b"
 }
@@ -171,7 +195,7 @@ pytest tests/ --cov=app --cov-report=html
 - **Embeddings**: sentence-transformers (all-MiniLM-L6-v2, local/offline)
 - **Vector DB**: ChromaDB (persisted locally under `data/chroma`)
 - **Document parsing**: pypdf, python-docx
-- **Testing**: pytest (35 tests, mocked LLM calls)
+- **Testing**: pytest (40 tests, mocked LLM calls)
 - **CI/CD**: GitHub Actions
 
 ## 📚 Learning Path

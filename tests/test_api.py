@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from app.main import app
+from app.models import QueryClassification, SearchResult
 from app.session_store import session_store
 
 client = TestClient(app)
@@ -588,3 +589,140 @@ def test_search_stats_endpoint(cleanup_documents):
     data = response.json()
     assert data["total_documents"] >= 1
     assert data["total_chunks"] >= 1
+
+
+# Feature 6: Smart Router Tests
+
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_classify_query_fallback_on_invalid_json(mock_chat):
+    """Classifier should fall back to conservative retrieval when JSON parsing fails."""
+    from app.main import classify_query
+    import asyncio
+
+    mock_chat.return_value = "not json"
+
+    result = asyncio.run(classify_query("Tell me about the policy"))
+
+    assert result.needs_retrieval is True
+    assert result.confidence == 0.3
+    assert result.query_type == "ambiguous"
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_smart_chat_routes_general_question_to_llm(mock_chat, mock_search, mock_classify):
+    """Confident general questions should skip retrieval."""
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False,
+        confidence=0.92,
+        query_type="general",
+    )
+    mock_chat.return_value = "A logistics KPI measures operational performance."
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What is a KPI?"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "llm"
+    assert data["chunks_used"] == 0
+    assert data["confidence"] == 0.92
+    assert data["answer"] == "A logistics KPI measures operational performance."
+    mock_search.assert_not_called()
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_smart_chat_routes_document_question_to_rag(mock_chat, mock_search, mock_classify):
+    """Confident document-dependent questions should retrieve context."""
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=True,
+        confidence=0.84,
+        query_type="domain",
+    )
+    mock_search.return_value = [
+        SearchResult(
+            chunk_id="chunk-1",
+            text="The on-time delivery target is 97%.",
+            score=0.88,
+            document_id="doc-1",
+            filename="kpi-policy.txt",
+            chunk_index=0,
+        )
+    ]
+    mock_chat.return_value = "The target is 97% on-time delivery."
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What is the uploaded on-time delivery target?", "top_k": 2}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "rag"
+    assert data["chunks_used"] == 1
+    assert "retrieved 1 chunk" in data["retrieval_method"]
+    mock_search.assert_called_once_with(
+        "What is the uploaded on-time delivery target?",
+        top_k=2,
+        document_id=None,
+    )
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_smart_chat_routes_low_confidence_to_hybrid(mock_chat, mock_search, mock_classify):
+    """Low-confidence classifications should use hybrid retrieval."""
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False,
+        confidence=0.42,
+        query_type="ambiguous",
+    )
+    mock_search.return_value = []
+    mock_chat.return_value = "I need more context, but here is the likely answer."
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "Tell me about the policy"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "hybrid"
+    assert data["chunks_used"] == 0
+    assert data["classification"]["query_type"] == "ambiguous"
+    mock_search.assert_called_once()
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_smart_chat_with_session_persists_history(mock_chat, mock_search, mock_classify):
+    """Smart chat should persist user and assistant turns when session_id is provided."""
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False,
+        confidence=0.9,
+        query_type="general",
+    )
+    mock_chat.return_value = "Safety stock protects against demand variation."
+
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What is safety stock?", "session_id": session_id}
+    )
+
+    assert response.status_code == 200
+    history_response = client.get(f"/api/sessions/{session_id}/history")
+    history = history_response.json()
+    assert history["total"] == 2
+    assert history["messages"][0]["role"] == "user"
+    assert history["messages"][1]["role"] == "assistant"
+    mock_search.assert_not_called()

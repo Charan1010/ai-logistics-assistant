@@ -2,7 +2,7 @@
 Pydantic models for API requests and responses.
 """
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, Field
 
 
@@ -146,3 +146,33 @@ class SearchResponse(BaseModel):
     query: str
     results: List[SearchResult]
     total: int
+
+
+# Smart Router Models (Feature 6)
+
+class QueryClassification(BaseModel):
+    """Router decision about whether a query needs retrieved document context."""
+    needs_retrieval: bool = Field(..., description="Whether document retrieval is needed")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Router confidence between 0 and 1")
+    query_type: Literal["general", "domain", "professional_document", "ambiguous"] = Field(
+        ..., description="Type of query being routed"
+    )
+
+
+class SmartChatRequest(BaseModel):
+    """Request model for smart routed chat."""
+    message: str = Field(..., min_length=1, description="User's message to route and answer")
+    session_id: Optional[str] = Field(None, description="Optional session ID for conversation history")
+    top_k: int = Field(3, ge=1, le=10, description="Number of chunks to retrieve when retrieval is used")
+    document_id: Optional[str] = Field(None, description="Optional: scope retrieval to a single document")
+
+
+class SmartChatResponse(BaseModel):
+    """Response model for the smart router endpoint."""
+    answer: str
+    source: Literal["llm", "rag", "hybrid", "pageindex"]
+    chunks_used: int
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    retrieval_method: str
+    classification: QueryClassification
+    model: str = Field(..., description="LLM model used for generation")
