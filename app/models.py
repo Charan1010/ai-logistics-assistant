@@ -59,6 +59,7 @@ class SessionResponse(BaseModel):
     updated_at: datetime
     message_count: int
     metadata: dict
+    tenant_id: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):
@@ -84,6 +85,7 @@ class DocumentUploadResponse(BaseModel):
     file_size: int = Field(..., description="File size in bytes")
     chunks_created: int = Field(..., description="Number of chunks created")
     upload_date: datetime = Field(..., description="Upload timestamp")
+    tenant_id: Optional[str] = None
 
 
 class DocumentResponse(BaseModel):
@@ -92,6 +94,7 @@ class DocumentResponse(BaseModel):
     filename: str
     upload_date: str
     total_chunks: int
+    tenant_id: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -176,3 +179,35 @@ class SmartChatResponse(BaseModel):
     retrieval_method: str
     classification: QueryClassification
     model: str = Field(..., description="LLM model used for generation")
+    retrieval_log_id: Optional[str] = Field(None, description="Retrieval-memory log entry ID when retrieval was used")
+
+
+# Retrieval Memory Models (Feature 6 Part C)
+
+class RetrievalLogEntry(BaseModel):
+    """A record of what chunks were retrieved for a Smart Chat request."""
+    id: str
+    session_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    query: str
+    retrieved_chunks: List[str]
+    retrieval_scores: List[float]
+    source_used: Literal["rag", "hybrid", "pageindex"]
+    timestamp: datetime
+    was_helpful: Optional[bool] = None
+
+
+class KnowledgeDigest(BaseModel):
+    """Summary of retrieval patterns learned across Smart Chat requests."""
+    generated_at: datetime
+    tenant_id: Optional[str] = None
+    top_chunks: List[str]
+    query_patterns: List[str]
+    coverage_gaps: List[str]
+    summary: str
+    retrieval_count: int
+
+
+class RetrievalFeedbackRequest(BaseModel):
+    """Feedback payload for a retrieval log entry."""
+    was_helpful: bool

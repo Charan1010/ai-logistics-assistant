@@ -23,6 +23,8 @@ Executive-level AI assistant that understands logistics operations, provides rea
 - [x] **Feature 4: Document Ingestion** - Upload PDF/TXT/DOCX, sentence-aware chunking, local embeddings, ChromaDB storage
 - [x] **Feature 5: Semantic Search** - Vector similarity search over indexed chunks with 0.0-1.0 relevance scores
 - [x] **Feature 6: Smart Routing** - LLM/RAG/hybrid route selection with transparent audit trail
+  - Optional multi-tenant isolation with `X-Tenant-ID` scoped sessions, documents, and searches
+  - Optional retrieval memory digest that learns from prior RAG/hybrid retrievals
 
 ### Phase 4: Intelligence (Planned)
 - [ ] **Feature 7: Basic Agent** - Function calling and tool use
@@ -46,12 +48,13 @@ ai-logistics-assistant/
 │   ├── session_store.py       # In-memory conversation history (Feature 3)
 │   ├── document_processor.py  # PDF/TXT/DOCX parsing + sentence-aware chunking (Feature 4)
 │   ├── embeddings.py          # Local sentence-transformers embedding model (Feature 4/5)
+│   ├── retrieval_memory.py    # Retrieval log + knowledge digest (Feature 6 Part C)
 │   └── vector_store.py        # ChromaDB storage + ranked similarity search (Feature 4/5)
 ├── ui/
-│   └── index.html             # Tabbed web UI: Chat, Structured, Smart, Documents, Search
+│   └── index.html             # Tabbed web UI: Chat, Structured, Smart, Documents, Search, Memory
 ├── tests/
 │   ├── conftest.py            # Offline/SSL env setup for tests
-│   └── test_api.py            # API tests (40 tests across all features)
+│   └── test_api.py            # API tests (52 tests across all features)
 ├── data/
 │   ├── chroma/                # Persisted vector DB (gitignored)
 │   └── uploads/                # Uploaded source files (gitignored)
@@ -97,6 +100,9 @@ uvicorn app.main:app --reload --port 8000
 4. **Smart tab** - ask a question and let the router choose LLM-only, RAG, or hybrid with an audit trail
 5. **Documents tab** - drag-and-drop or click to upload PDF/TXT/DOCX files; view live chunk/document counts
 6. **Search tab** - ask a question and get ranked, scored chunks from your uploaded documents (optionally scoped to one document)
+7. **Memory tab** - inspect retrieval logs, top chunks, query patterns, coverage gaps, and mark retrievals helpful/unhelpful
+
+When `ENABLE_MULTI_TENANT=true`, the top bar shows tenant mode as `isolated`. Type a tenant name like `tenant-alpha`, click **Switch**, and the UI reloads sessions/documents/search filters for that tenant. Recently used tenants appear in the tenant dropdown; the backend does not expose a global tenant registry, so this list is stored locally in your browser.
 
 ### Using the API 🔌
 
@@ -143,6 +149,30 @@ curl http://localhost:8000/api/documents/stats
 curl -X POST http://localhost:8000/api/chat/smart \
   -H "Content-Type: application/json" \
   -d '{"message": "Does this question need our uploaded documents?", "top_k": 3}'
+
+# Multi-tenant mode (Feature 6 Part B)
+# First set ENABLE_MULTI_TENANT=true in .env, then send X-Tenant-ID.
+curl -X POST http://localhost:8000/api/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: tenant-alpha" \
+  -d '{}'
+
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: tenant-alpha" \
+  -d '{"query": "premium delivery target", "top_k": 5}'
+
+# Retrieval memory (Feature 6 Part C)
+curl http://localhost:8000/api/knowledge-digest \
+  -H "X-Tenant-ID: tenant-alpha"
+
+curl http://localhost:8000/api/retrieval-logs \
+  -H "X-Tenant-ID: tenant-alpha"
+
+curl -X POST http://localhost:8000/api/retrieval-logs/<entry-id>/feedback \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: tenant-alpha" \
+  -d '{"was_helpful": false}'
 ```
 
 Structured response shape:
@@ -174,7 +204,22 @@ Smart response shape:
     "confidence": 0.0,
     "query_type": "general | domain | professional_document | ambiguous"
   },
+  "retrieval_log_id": "optional-log-id-when-retrieval-ran",
   "model": "qwen2.5:3b"
+}
+```
+
+Retrieval memory digest shape:
+
+```json
+{
+  "generated_at": "2026-09-09T00:00:00",
+  "tenant_id": "tenant-alpha",
+  "top_chunks": ["chunk-id"],
+  "query_patterns": ["Frequent query term: delivery"],
+  "coverage_gaps": ["Low-confidence retrieval: ..."],
+  "summary": "Observed retrieval patterns...",
+  "retrieval_count": 3
 }
 ```
 
@@ -195,7 +240,7 @@ pytest tests/ --cov=app --cov-report=html
 - **Embeddings**: sentence-transformers (all-MiniLM-L6-v2, local/offline)
 - **Vector DB**: ChromaDB (persisted locally under `data/chroma`)
 - **Document parsing**: pypdf, python-docx
-- **Testing**: pytest (40 tests, mocked LLM calls)
+- **Testing**: pytest (52 tests, mocked LLM calls)
 - **CI/CD**: GitHub Actions
 
 ## 📚 Learning Path

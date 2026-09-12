@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Leave False on CI/fresh machines so the model can download normally.
     embeddings_offline_mode: bool = False
 
+    # Multi-tenancy is off for local learning, but can be enabled to require
+    # X-Tenant-ID and scope sessions/documents/searches by tenant.
+    enable_multi_tenant: bool = False
+
+    # Feature 6 Part C: inject retrieval-memory digest into Smart Chat prompts.
+    enable_long_term_context: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

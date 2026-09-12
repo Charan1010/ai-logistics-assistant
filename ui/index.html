@@ -53,12 +53,23 @@
         align-items: center;
         justify-content: space-between;
         margin-bottom: 14px;
+        gap: 12px;
+        flex-wrap: wrap;
     }
     .header-title { display: flex; align-items: center; gap: 10px; }
     .header-title h1 { font-size: 20px; font-weight: 700; }
     .status { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: 0.95; }
     .status-dot { width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: pulse 2s infinite; }
     .status-dot.offline { background: #f87171; animation: none; }
+    .tenant-control { display: flex; align-items: center; gap: 7px; color: rgba(255,255,255,0.9); font-size: 12px; flex-wrap: wrap; }
+    .tenant-control input, .tenant-control select { width: 130px; padding: 7px 10px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.5); background: rgba(255,255,255,0.18); color: white; outline: none; }
+    .tenant-control select option { color: var(--text); }
+    .tenant-control input::placeholder { color: rgba(255,255,255,0.65); }
+    .tenant-switch-btn { padding: 7px 10px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.5); background: rgba(255,255,255,0.24); color: white; cursor: pointer; font-size: 12px; font-weight: 700; }
+    .tenant-switch-btn:hover { background: rgba(255,255,255,0.34); }
+    .tenant-mode-badge { padding: 4px 8px; border-radius: 999px; background: rgba(255,255,255,0.22); font-size: 11px; font-weight: 700; }
+    .tenant-mode-badge.enabled { background: rgba(22,163,74,0.26); }
+    .tenant-mode-badge.disabled { background: rgba(217,119,6,0.28); }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
     /* Tabs */
@@ -255,6 +266,13 @@
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">Connecting...</span>
             </div>
+            <div class="tenant-control">
+                <span>Tenant</span>
+                <select id="tenantSelect" title="Previously used tenants" onchange="selectTenantFromList()"></select>
+                <input id="tenantInput" value="default" placeholder="new tenant" title="Sent as X-Tenant-ID when multi-tenant mode is enabled">
+                <button class="tenant-switch-btn" onclick="applyTenant()">Switch</button>
+                <span class="tenant-mode-badge" id="tenantModeBadge">checking...</span>
+            </div>
         </div>
         <div class="tabs">
             <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Chat</button>
@@ -262,6 +280,7 @@
             <button class="tab-btn" data-tab="smart" onclick="switchTab('smart')">🧭 Smart</button>
             <button class="tab-btn" data-tab="documents" onclick="switchTab('documents')">📄 Documents</button>
             <button class="tab-btn" data-tab="search" onclick="switchTab('search')">🔍 Search</button>
+            <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">🧠 Memory</button>
         </div>
     </div>
 
@@ -319,6 +338,14 @@
 
         <!-- SMART ROUTER PANEL -->
         <div class="panel" id="panel-smart">
+            <div class="chat-toolbar">
+                <span>Smart session: <span class="session-pill" id="smartSessionId">creating...</span></span>
+                <div class="toolbar-actions">
+                    <button class="chip-btn" onclick="createNewSmartSession()">🔄 New session</button>
+                    <button class="chip-btn" onclick="toggleSessionsList('smartSessionsList')">📋 History</button>
+                </div>
+            </div>
+            <div class="sessions-panel" id="smartSessionsList"></div>
             <div class="smart-body">
                 <div class="structured-card">
                     <h3>Smart routed answer</h3>
@@ -368,6 +395,23 @@
                 </div>
             </div>
         </div>
+
+        <!-- RETRIEVAL MEMORY PANEL -->
+        <div class="panel" id="panel-memory">
+            <div class="structured-body">
+                <div class="structured-card">
+                    <h3>Retrieval Memory</h3>
+                    <button class="primary" onclick="refreshRetrievalMemory()">Refresh</button>
+                </div>
+                <div id="memoryDigest">
+                    <p class="empty-hint">Run Smart Chat with document retrieval, then refresh to see retrieval patterns.</p>
+                </div>
+                <div class="structured-card">
+                    <h3>Recent Retrieval Logs</h3>
+                    <div id="retrievalLogs"><p style="color:var(--text-muted);font-size:13px;">No retrieval logs loaded.</p></div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -377,6 +421,72 @@
 const API_URL = window.location.origin;
 let messageCount = 0;
 let currentSessionId = null;
+let multiTenantEnabled = false;
+let currentTenantId = localStorage.getItem('activeTenantId') || 'default';
+
+function knownTenants() {
+    try {
+        const tenants = JSON.parse(localStorage.getItem('knownTenantIds') || '[]');
+        return Array.isArray(tenants) && tenants.length ? tenants : ['default'];
+    } catch (error) {
+        return ['default'];
+    }
+}
+
+function saveKnownTenant(tenantId) {
+    const tenants = knownTenants().filter(t => t !== tenantId);
+    tenants.unshift(tenantId);
+    localStorage.setItem('knownTenantIds', JSON.stringify(tenants.slice(0, 10)));
+    localStorage.setItem('activeTenantId', tenantId);
+    renderTenantSelector();
+}
+
+function renderTenantSelector() {
+    const select = document.getElementById('tenantSelect');
+    const tenants = knownTenants();
+    if (!tenants.includes(currentTenantId)) tenants.unshift(currentTenantId);
+    select.innerHTML = tenants.map(tenant => `<option value="${tenant}"></option>`).join('');
+    select.querySelectorAll('option').forEach((option, index) => {
+        option.textContent = tenants[index];
+        option.selected = tenants[index] === currentTenantId;
+    });
+}
+
+function selectTenantFromList() {
+    document.getElementById('tenantInput').value = document.getElementById('tenantSelect').value;
+}
+
+async function applyTenant() {
+    const nextTenant = document.getElementById('tenantInput').value.trim() || 'default';
+    currentTenantId = nextTenant;
+    saveKnownTenant(nextTenant);
+    currentSessionId = null;
+    document.getElementById('chatContainer').innerHTML = `
+        <div class="welcome-message">
+            <h2 data-slot="tenant-title"></h2>
+            <p>Sessions and documents will be scoped to this tenant when multi-tenant mode is enabled.</p>
+        </div>`;
+    document.querySelector('[data-slot="tenant-title"]').textContent = `Tenant switched to ${nextTenant}`;
+    document.getElementById('smartOutput').innerHTML = '<p class="empty-hint">Tenant switched. Ask a question to use this tenant context.</p>';
+    messageCount = 0;
+    await createSession();
+    await loadSessionsList();
+    await loadSessionsList('smartSessionsList');
+    await refreshDocuments();
+    await refreshDocumentFilterOptions();
+    await refreshSmartDocumentFilterOptions();
+    await refreshRetrievalMemory();
+    showToast(`Tenant switched to ${nextTenant}`);
+}
+
+function tenantHeaders(extra = {}) {
+    const tenantId = currentTenantId || document.getElementById('tenantInput')?.value.trim();
+    return tenantId ? { ...extra, 'X-Tenant-ID': tenantId } : extra;
+}
+
+function jsonHeaders() {
+    return tenantHeaders({ 'Content-Type': 'application/json' });
+}
 
 /* ---------------- Toast ---------------- */
 function showToast(message, isError = false) {
@@ -394,6 +504,7 @@ function switchTab(tab) {
     if (tab === 'documents') refreshDocuments();
     if (tab === 'search') refreshDocumentFilterOptions();
     if (tab === 'smart') refreshSmartDocumentFilterOptions();
+    if (tab === 'memory') refreshRetrievalMemory();
 }
 
 /* ---------------- Status ---------------- */
@@ -403,10 +514,22 @@ async function checkServerStatus() {
         const data = await response.json();
         document.getElementById('statusText').textContent = `Connected · ${data.model}`;
         document.getElementById('statusDot').classList.remove('offline');
+        multiTenantEnabled = Boolean(data.multi_tenant);
+        updateTenantModeBadge();
     } catch (error) {
         document.getElementById('statusText').textContent = 'Server offline';
         document.getElementById('statusDot').classList.add('offline');
     }
+}
+
+function updateTenantModeBadge() {
+    const badge = document.getElementById('tenantModeBadge');
+    badge.classList.toggle('enabled', multiTenantEnabled);
+    badge.classList.toggle('disabled', !multiTenantEnabled);
+    badge.textContent = multiTenantEnabled ? 'isolated' : 'single mode';
+    badge.title = multiTenantEnabled
+        ? 'Backend is enforcing X-Tenant-ID isolation.'
+        : 'Backend is not enforcing tenants. Start with ENABLE_MULTI_TENANT=true to isolate data.';
 }
 
 /* ---------------- Chat: sessions ---------------- */
@@ -414,16 +537,27 @@ async function createSession() {
     try {
         const response = await fetch(`${API_URL}/api/sessions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders(),
             body: JSON.stringify({})
         });
         const data = await response.json();
         currentSessionId = data.session_id;
-        document.getElementById('sessionId').textContent = currentSessionId.substring(0, 8) + '...';
-        document.getElementById('sessionId').title = currentSessionId;
+        updateSessionLabels(currentSessionId);
     } catch (error) {
         document.getElementById('sessionId').textContent = 'unavailable';
+        document.getElementById('smartSessionId').textContent = 'unavailable';
     }
+}
+
+function updateSessionLabels(sessionId) {
+    const shortId = sessionId.substring(0, 8) + '...';
+    ['sessionId', 'smartSessionId'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = shortId;
+            el.title = sessionId;
+        }
+    });
 }
 
 async function createNewSession() {
@@ -435,13 +569,27 @@ async function createNewSession() {
     messageCount = 0;
     await createSession();
     await loadSessionsList();
+    await loadSessionsList('smartSessionsList');
 }
 
-async function loadSessionsList() {
+async function createNewSmartSession() {
+    document.getElementById('smartOutput').innerHTML = '<p class="empty-hint">New smart session started. Ask a question to see the router decision and audit trail.</p>';
+    document.getElementById('chatContainer').innerHTML = `
+        <div class="welcome-message">
+            <h2>New conversation started</h2>
+            <p>Ask me anything about logistics and supply chain operations.</p>
+        </div>`;
+    messageCount = 0;
+    await createSession();
+    await loadSessionsList();
+    await loadSessionsList('smartSessionsList');
+}
+
+async function loadSessionsList(targetId = 'sessionsList') {
     try {
-        const response = await fetch(`${API_URL}/api/sessions`);
+        const response = await fetch(`${API_URL}/api/sessions`, { headers: tenantHeaders() });
         const data = await response.json();
-        const container = document.getElementById('sessionsList');
+        const container = document.getElementById(targetId);
         if (!data.sessions.length) {
             container.innerHTML = '<div class="session-item">No sessions yet</div>';
             return;
@@ -449,7 +597,7 @@ async function loadSessionsList() {
         container.innerHTML = data.sessions.map(s => {
             const isActive = s.session_id === currentSessionId;
             const time = new Date(s.updated_at).toLocaleString();
-            return `<div class="session-item ${isActive ? 'active' : ''}" onclick="switchToSession('${s.session_id}')">
+            return `<div class="session-item ${isActive ? 'active' : ''}" onclick="switchToSession('${s.session_id}', '${targetId}')">
                         <div class="session-item-id">${s.session_id.substring(0, 8)}...</div>
                         <div class="session-item-info">${s.message_count} messages · ${time}</div>
                     </div>`;
@@ -459,39 +607,45 @@ async function loadSessionsList() {
     }
 }
 
-async function switchToSession(sessionId) {
+async function switchToSession(sessionId, targetId = 'sessionsList') {
     document.getElementById('sessionsList').classList.remove('show');
+    document.getElementById('smartSessionsList').classList.remove('show');
     if (sessionId === currentSessionId) return;
     try {
-        const response = await fetch(`${API_URL}/api/sessions/${sessionId}/history`);
+        const response = await fetch(`${API_URL}/api/sessions/${sessionId}/history`, { headers: tenantHeaders() });
         const data = await response.json();
         document.getElementById('chatContainer').innerHTML = '';
         messageCount = 0;
         data.messages.forEach(m => addMessage(m.content, m.role === 'user'));
         currentSessionId = sessionId;
-        document.getElementById('sessionId').textContent = sessionId.substring(0, 8) + '...';
-        document.getElementById('sessionId').title = sessionId;
+        updateSessionLabels(sessionId);
+        if (targetId === 'smartSessionsList') {
+            document.getElementById('smartOutput').innerHTML = '<p class="empty-hint">Selected an existing session. Ask a follow-up in Smart to use that session history.</p>';
+        }
         await loadSessionsList();
+        await loadSessionsList('smartSessionsList');
     } catch (error) {
         showToast('Failed to load session history', true);
     }
 }
 
-function toggleSessionsList() {
-    const list = document.getElementById('sessionsList');
+function toggleSessionsList(targetId = 'sessionsList') {
+    const list = document.getElementById(targetId);
     if (list.classList.contains('show')) {
         list.classList.remove('show');
     } else {
-        loadSessionsList();
+        loadSessionsList(targetId);
         list.classList.add('show');
     }
 }
 
 document.addEventListener('click', (event) => {
-    const list = document.getElementById('sessionsList');
-    if (list.classList.contains('show') && !event.target.closest('.chat-toolbar') && !event.target.closest('.sessions-panel')) {
-        list.classList.remove('show');
-    }
+    ['sessionsList', 'smartSessionsList'].forEach(id => {
+        const list = document.getElementById(id);
+        if (list.classList.contains('show') && !event.target.closest('.chat-toolbar') && !event.target.closest('.sessions-panel')) {
+            list.classList.remove('show');
+        }
+    });
 });
 
 /* ---------------- Chat: messaging ---------------- */
@@ -534,7 +688,7 @@ async function sendMessage() {
     try {
         const response = await fetch(`${API_URL}/api/chat`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders(),
             body: JSON.stringify({ message, session_id: currentSessionId })
         });
         if (!response.ok) throw new Error('Server error');
@@ -620,7 +774,7 @@ async function sendStructuredMessage() {
     try {
         const response = await fetch(`${API_URL}/api/chat/structured`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders(),
             body: JSON.stringify({ message })
         });
         if (!response.ok) throw new Error('Server error');
@@ -640,7 +794,7 @@ function handleStructuredKeyPress(event) { if (event.key === 'Enter') sendStruct
 /* ---------------- Smart Router tab ---------------- */
 async function refreshSmartDocumentFilterOptions() {
     try {
-        const response = await fetch(`${API_URL}/api/documents`);
+        const response = await fetch(`${API_URL}/api/documents`, { headers: tenantHeaders() });
         const data = await response.json();
         const select = document.getElementById('smartDocFilter');
         select.innerHTML = '<option value="">All documents</option>' +
@@ -695,7 +849,7 @@ async function sendSmartMessage() {
     try {
         const response = await fetch(`${API_URL}/api/chat/smart`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders(),
             body: JSON.stringify({
                 message,
                 session_id: currentSessionId,
@@ -706,7 +860,9 @@ async function sendSmartMessage() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Smart router failed');
         renderSmartOutput(data);
+        await refreshRetrievalMemory();
         await loadSessionsList();
+        await loadSessionsList('smartSessionsList');
     } catch (error) {
         document.getElementById('smartOutput').innerHTML = '<p class="empty-hint">Smart router failed. Please try again.</p>';
         showToast(error.message, true);
@@ -722,8 +878,8 @@ function handleSmartKeyPress(event) { if (event.key === 'Enter') sendSmartMessag
 async function refreshDocuments() {
     try {
         const [docsRes, statsRes] = await Promise.all([
-            fetch(`${API_URL}/api/documents`),
-            fetch(`${API_URL}/api/documents/stats`)
+            fetch(`${API_URL}/api/documents`, { headers: tenantHeaders() }),
+            fetch(`${API_URL}/api/documents/stats`, { headers: tenantHeaders() })
         ]);
         const docsData = await docsRes.json();
         const statsData = await statsRes.json();
@@ -760,7 +916,7 @@ async function uploadFile(file) {
     formData.append('file', file);
     showToast(`Uploading ${file.name}...`);
     try {
-        const response = await fetch(`${API_URL}/api/documents/upload`, { method: 'POST', body: formData });
+        const response = await fetch(`${API_URL}/api/documents/upload`, { method: 'POST', headers: tenantHeaders(), body: formData });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Upload failed');
         showToast(`Indexed ${data.filename} (${data.chunks_created} chunks)`);
@@ -772,7 +928,7 @@ async function uploadFile(file) {
 
 async function deleteDocument(documentId) {
     try {
-        const response = await fetch(`${API_URL}/api/documents/${documentId}`, { method: 'DELETE' });
+        const response = await fetch(`${API_URL}/api/documents/${documentId}`, { method: 'DELETE', headers: tenantHeaders() });
         if (!response.ok && response.status !== 204) throw new Error('Delete failed');
         showToast('Document deleted');
         await refreshDocuments();
@@ -791,7 +947,7 @@ uploadZone.addEventListener('drop', (e) => { if (e.dataTransfer.files.length) up
 /* ---------------- Search tab ---------------- */
 async function refreshDocumentFilterOptions() {
     try {
-        const response = await fetch(`${API_URL}/api/documents`);
+        const response = await fetch(`${API_URL}/api/documents`, { headers: tenantHeaders() });
         const data = await response.json();
         const select = document.getElementById('searchDocFilter');
         select.innerHTML = '<option value="">All documents</option>' +
@@ -823,7 +979,7 @@ async function runSearch() {
     try {
         const response = await fetch(`${API_URL}/api/search`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders(),
             body: JSON.stringify({ query, top_k: 5, document_id: documentId || null })
         });
         const data = await response.json();
@@ -862,7 +1018,109 @@ async function runSearch() {
 }
 function handleSearchKeyPress(event) { if (event.key === 'Enter') runSearch(); }
 
+/* ---------------- Retrieval Memory tab ---------------- */
+async function refreshRetrievalMemory() {
+    const digestContainer = document.getElementById('memoryDigest');
+    const logsContainer = document.getElementById('retrievalLogs');
+    if (!digestContainer || !logsContainer) return;
+
+    try {
+        const [digestRes, logsRes] = await Promise.all([
+            fetch(`${API_URL}/api/knowledge-digest`, { headers: tenantHeaders() }),
+            fetch(`${API_URL}/api/retrieval-logs`, { headers: tenantHeaders() })
+        ]);
+        const digest = await digestRes.json();
+        const logs = await logsRes.json();
+        if (!digestRes.ok) throw new Error(digest.detail || 'Digest failed');
+        if (!logsRes.ok) throw new Error(logs.detail || 'Logs failed');
+        renderMemoryDigest(digest);
+        renderRetrievalLogs(logs);
+    } catch (error) {
+        digestContainer.innerHTML = '<p class="empty-hint">Retrieval memory is unavailable for this tenant.</p>';
+        logsContainer.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">No retrieval logs loaded.</p>';
+        showToast(error.message, true);
+    }
+}
+
+function renderMemoryDigest(digest) {
+    const container = document.getElementById('memoryDigest');
+    const listItems = (items) => items.length
+        ? `<ul class="pill-list">${items.map(() => '<li></li>').join('')}</ul>`
+        : '<p style="color:var(--text-muted);font-size:13px;">None yet.</p>';
+
+    container.innerHTML = `
+        <div class="structured-card">
+            <h3>Digest Summary</h3>
+            <p data-slot="summary" style="font-size:14px;line-height:1.6;"></p>
+            <div class="audit-grid">
+                <div class="audit-item"><div class="label">Retrievals</div><div class="value" data-slot="count"></div></div>
+                <div class="audit-item"><div class="label">Tenant</div><div class="value" data-slot="tenant"></div></div>
+            </div>
+        </div>
+        <div class="structured-card"><h3>Top Chunks</h3><div data-slot="top_chunks"></div></div>
+        <div class="structured-card"><h3>Query Patterns</h3><div data-slot="query_patterns"></div></div>
+        <div class="structured-card"><h3>Coverage Gaps</h3><div data-slot="coverage_gaps"></div></div>`;
+
+    container.querySelector('[data-slot="summary"]').textContent = digest.summary;
+    container.querySelector('[data-slot="count"]').textContent = digest.retrieval_count;
+    container.querySelector('[data-slot="tenant"]').textContent = digest.tenant_id || 'single-tenant';
+    ['top_chunks', 'query_patterns', 'coverage_gaps'].forEach(field => {
+        container.querySelector(`[data-slot="${field}"]`).innerHTML = listItems(digest[field]);
+        const items = container.querySelectorAll(`[data-slot="${field}"] li`);
+        digest[field].forEach((value, index) => { items[index].textContent = value; });
+    });
+}
+
+function renderRetrievalLogs(logs) {
+    const container = document.getElementById('retrievalLogs');
+    if (!logs.length) {
+        container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">No retrieval logs yet.</p>';
+        return;
+    }
+
+    container.innerHTML = logs.map(() => `
+        <div class="search-result">
+            <div class="search-result-head">
+                <span class="search-result-source"></span>
+                <span class="source-badge"></span>
+            </div>
+            <div class="search-result-text"></div>
+            <div style="margin-top:10px;display:flex;gap:8px;">
+                <button class="chip-btn" data-feedback="yes">Helpful</button>
+                <button class="chip-btn" data-feedback="no">Not helpful</button>
+            </div>
+        </div>
+    `).join('');
+
+    const cards = container.querySelectorAll('.search-result');
+    logs.forEach((log, index) => {
+        const card = cards[index];
+        card.querySelector('.search-result-source').textContent = `${new Date(log.timestamp).toLocaleString()} · ${log.retrieved_chunks.length} chunks`;
+        card.querySelector('.source-badge').textContent = log.source_used;
+        card.querySelector('.search-result-text').textContent = log.query;
+        card.querySelector('[data-feedback="yes"]').onclick = () => sendRetrievalFeedback(log.id, true);
+        card.querySelector('[data-feedback="no"]').onclick = () => sendRetrievalFeedback(log.id, false);
+    });
+}
+
+async function sendRetrievalFeedback(entryId, wasHelpful) {
+    try {
+        const response = await fetch(`${API_URL}/api/retrieval-logs/${entryId}/feedback`, {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ was_helpful: wasHelpful })
+        });
+        if (!response.ok) throw new Error('Feedback failed');
+        showToast('Feedback saved');
+        await refreshRetrievalMemory();
+    } catch (error) {
+        showToast(error.message, true);
+    }
+}
+
 /* ---------------- Init ---------------- */
+document.getElementById('tenantInput').value = currentTenantId;
+renderTenantSelector();
 checkServerStatus();
 createSession().then(() => loadSessionsList());
 document.getElementById('messageInput').focus();

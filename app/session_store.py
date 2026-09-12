@@ -23,6 +23,7 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     messages: List[Message] = field(default_factory=list)
     metadata: Dict[str, str] = field(default_factory=dict)
+    tenant_id: Optional[str] = None
 
 
 class SessionStore:
@@ -33,7 +34,7 @@ class SessionStore:
         self.max_sessions = max_sessions
         self.ttl_hours = ttl_hours
 
-    def create_session(self, metadata: Optional[Dict[str, str]] = None) -> Session:
+    def create_session(self, metadata: Optional[Dict[str, str]] = None, tenant_id: Optional[str] = None) -> Session:
         """Create a new session with a unique ID."""
         # Clean up old sessions if we're at the limit
         if len(self._sessions) >= self.max_sessions:
@@ -42,7 +43,8 @@ class SessionStore:
         session_id = str(uuid.uuid4())
         session = Session(
             session_id=session_id,
-            metadata=metadata or {}
+            metadata=metadata or {},
+            tenant_id=tenant_id,
         )
         self._sessions[session_id] = session
         return session
@@ -51,14 +53,18 @@ class SessionStore:
         """Retrieve a session by ID."""
         return self._sessions.get(session_id)
 
-    def list_sessions(self, limit: int = 100) -> List[Session]:
+    def list_sessions(self, limit: int = 100, tenant_id: Optional[str] = None) -> List[Session]:
         """List all active sessions, most recent first."""
-        sessions = sorted(
-            self._sessions.values(),
+        sessions = self._sessions.values()
+        if tenant_id is not None:
+            sessions = [s for s in sessions if s.tenant_id == tenant_id]
+
+        sorted_sessions = sorted(
+            sessions,
             key=lambda s: s.updated_at,
             reverse=True
         )
-        return sessions[:limit]
+        return sorted_sessions[:limit]
 
     def add_message(self, session_id: str, role: str, content: str) -> bool:
         """Add a message to a session. Returns True if successful."""

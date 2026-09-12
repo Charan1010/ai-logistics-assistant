@@ -5,7 +5,9 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from app.main import app
+from app.config import settings
 from app.models import QueryClassification, SearchResult
+from app.retrieval_memory import retrieval_memory_store
 from app.session_store import session_store
 
 client = TestClient(app)
@@ -14,9 +16,17 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def clear_sessions():
     """Clear all sessions before each test."""
+    original_multi_tenant = settings.enable_multi_tenant
+    original_long_term_context = settings.enable_long_term_context
+    settings.enable_multi_tenant = False
+    settings.enable_long_term_context = False
     session_store.clear_all()
+    retrieval_memory_store.clear_all()
     yield
     session_store.clear_all()
+    retrieval_memory_store.clear_all()
+    settings.enable_multi_tenant = original_multi_tenant
+    settings.enable_long_term_context = original_long_term_context
 
 
 def test_root_endpoint_returns_ui():
@@ -670,6 +680,7 @@ def test_smart_chat_routes_document_question_to_rag(mock_chat, mock_search, mock
         "What is the uploaded on-time delivery target?",
         top_k=2,
         document_id=None,
+        tenant_id=None,
     )
 
 
@@ -725,4 +736,295 @@ def test_smart_chat_with_session_persists_history(mock_chat, mock_search, mock_c
     assert history["total"] == 2
     assert history["messages"][0]["role"] == "user"
     assert history["messages"][1]["role"] == "assistant"
+    mock_search.assert_not_called()
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_smart_chat_answers_memory_question_from_selected_session(mock_chat, mock_search, mock_classify):
+    """Smart chat should use prior turns when the user asks about session history."""
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+    session_store.add_message(session_id, "user", "How can we reduce warehouse dwell time?")
+    session_store.add_message(session_id, "assistant", "Focus on dock scheduling and staging discipline.")
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What was my last question?", "session_id": session_id}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "llm"
+    assert data["chunks_used"] == 0
+    assert data["confidence"] == 1.0
+    assert "Session memory" in data["retrieval_method"]
+    assert data["answer"] == 'Your last question was: "How can we reduce warehouse dwell time?"'
+    mock_classify.assert_not_called()
+    mock_search.assert_not_called()
+    mock_chat.assert_not_called()
+
+
+# Feature 6 Part B: Multi-Tenant Isolation Tests
+
+def test_multitenant_requires_tenant_header():
+    """Tenant-scoped endpoints should reject missing X-Tenant-ID when enabled."""
+    settings.enable_multi_tenant = True
+
+    response = client.post("/api/sessions", json={})
+
+    assert response.status_code == 400
+    assert "X-Tenant-ID" in response.json()["detail"]
+
+
+def test_multitenant_sessions_are_isolated():
+    """A session created by one tenant must not be readable by another tenant."""
+    settings.enable_multi_tenant = True
+
+    create_response = client.post("/api/sessions", json={}, headers={"X-Tenant-ID": "tenant-alpha"})
+    session_id = create_response.json()["session_id"]
+
+    allowed = client.get(f"/api/sessions/{session_id}", headers={"X-Tenant-ID": "tenant-alpha"})
+    blocked = client.get(f"/api/sessions/{session_id}", headers={"X-Tenant-ID": "tenant-beta"})
+
+    assert allowed.status_code == 200
+    assert allowed.json()["tenant_id"] == "tenant-alpha"
+    assert blocked.status_code == 403
+
+
+def test_multitenant_document_listing_is_isolated(cleanup_documents):
+    """Each tenant should only see its own uploaded documents."""
+    settings.enable_multi_tenant = True
+
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("alpha.txt", b"Alpha tenant warehouse policy.", "text/plain")},
+        headers={"X-Tenant-ID": "tenant-alpha"},
+    )
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("beta.txt", b"Beta tenant ocean freight policy.", "text/plain")},
+        headers={"X-Tenant-ID": "tenant-beta"},
+    )
+
+    alpha_docs = client.get("/api/documents", headers={"X-Tenant-ID": "tenant-alpha"}).json()["documents"]
+    beta_docs = client.get("/api/documents", headers={"X-Tenant-ID": "tenant-beta"}).json()["documents"]
+
+    assert {doc["filename"] for doc in alpha_docs} == {"alpha.txt"}
+    assert {doc["filename"] for doc in beta_docs} == {"beta.txt"}
+
+
+def test_multitenant_search_is_filtered_at_vector_store(cleanup_documents):
+    """Search should use the tenant filter so one tenant cannot retrieve another tenant's chunks."""
+    settings.enable_multi_tenant = True
+
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("alpha.txt", b"Alpha tenant has a 97 percent premium delivery target.", "text/plain")},
+        headers={"X-Tenant-ID": "tenant-alpha"},
+    )
+    client.post(
+        "/api/documents/upload",
+        files={"file": ("beta.txt", b"Beta tenant tracks cold chain exceptions daily.", "text/plain")},
+        headers={"X-Tenant-ID": "tenant-beta"},
+    )
+
+    response = client.post(
+        "/api/search",
+        json={"query": "premium delivery target", "top_k": 5},
+        headers={"X-Tenant-ID": "tenant-beta"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] >= 1
+    assert all(result["filename"] == "beta.txt" for result in data["results"])
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_multitenant_smart_chat_blocks_cross_tenant_session(mock_chat, mock_classify):
+    """Smart chat must reject session access from the wrong tenant before answering."""
+    settings.enable_multi_tenant = True
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False,
+        confidence=0.9,
+        query_type="general",
+    )
+    mock_chat.return_value = "This should not be returned."
+
+    create_response = client.post("/api/sessions", json={}, headers={"X-Tenant-ID": "tenant-alpha"})
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What is safety stock?", "session_id": session_id},
+        headers={"X-Tenant-ID": "tenant-beta"},
+    )
+
+    assert response.status_code == 403
+    mock_chat.assert_not_called()
+
+
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_multitenant_normal_chat_blocks_cross_tenant_session(mock_chat):
+    """Plain chat with session_id must also enforce tenant ownership."""
+    settings.enable_multi_tenant = True
+    mock_chat.return_value = "This should not be returned."
+
+    create_response = client.post("/api/sessions", json={}, headers={"X-Tenant-ID": "tenant-alpha"})
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "Can I use this session?", "session_id": session_id},
+        headers={"X-Tenant-ID": "tenant-beta"},
+    )
+
+    assert response.status_code == 403
+    mock_chat.assert_not_called()
+
+
+# Feature 6 Part C: Retrieval Memory Tests
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_retrieval_memory_logs_rag_retrieval(mock_chat, mock_search, mock_classify):
+    """RAG/Hybrid Smart Chat should log retrieved chunks for long-term context."""
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=True,
+        confidence=0.81,
+        query_type="domain",
+    )
+    mock_search.return_value = [
+        SearchResult(
+            chunk_id="chunk-a",
+            text="Premium delivery target is 97%.",
+            score=0.91,
+            document_id="doc-a",
+            filename="alpha-policy.txt",
+            chunk_index=0,
+        )
+    ]
+    mock_chat.return_value = "Premium delivery target is 97%."
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What is the premium delivery target?"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["retrieval_log_id"] is not None
+
+    logs = client.get("/api/retrieval-logs").json()
+    assert len(logs) == 1
+    assert logs[0]["query"] == "What is the premium delivery target?"
+    assert logs[0]["retrieved_chunks"] == ["chunk-a"]
+    assert logs[0]["retrieval_scores"] == [0.91]
+    assert logs[0]["source_used"] == "rag"
+
+
+def test_knowledge_digest_summarizes_retrieval_memory():
+    """Knowledge digest should aggregate top chunks and query patterns."""
+    retrieval_memory_store.log_retrieval(
+        query="premium delivery target",
+        retrieved_chunks=["chunk-a"],
+        retrieval_scores=[0.91],
+        source_used="rag",
+    )
+    retrieval_memory_store.log_retrieval(
+        query="premium delivery exception",
+        retrieved_chunks=["chunk-a", "chunk-b"],
+        retrieval_scores=[0.88, 0.22],
+        source_used="hybrid",
+    )
+
+    response = client.get("/api/knowledge-digest")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["retrieval_count"] == 2
+    assert data["top_chunks"][0] == "chunk-a"
+    assert data["query_patterns"]
+    assert "Observed 2 retrieval event" in data["summary"]
+
+
+def test_retrieval_feedback_marks_log_entry():
+    """Feedback endpoint should mark retrieval logs as helpful or not helpful."""
+    entry = retrieval_memory_store.log_retrieval(
+        query="warehouse dwell time",
+        retrieved_chunks=["chunk-dwell"],
+        retrieval_scores=[0.41],
+        source_used="hybrid",
+    )
+
+    response = client.post(
+        f"/api/retrieval-logs/{entry.id}/feedback",
+        json={"was_helpful": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["was_helpful"] is False
+
+    digest = client.get("/api/knowledge-digest").json()
+    assert "Marked unhelpful: warehouse dwell time" in digest["coverage_gaps"]
+
+
+def test_multitenant_retrieval_logs_are_isolated():
+    """Retrieval memory should be scoped by tenant when multi-tenant mode is enabled."""
+    settings.enable_multi_tenant = True
+    retrieval_memory_store.log_retrieval(
+        query="alpha delivery target",
+        retrieved_chunks=["alpha-chunk"],
+        retrieval_scores=[0.9],
+        source_used="rag",
+        tenant_id="tenant-alpha",
+    )
+    retrieval_memory_store.log_retrieval(
+        query="beta cold chain exception",
+        retrieved_chunks=["beta-chunk"],
+        retrieval_scores=[0.8],
+        source_used="rag",
+        tenant_id="tenant-beta",
+    )
+
+    alpha_logs = client.get("/api/retrieval-logs", headers={"X-Tenant-ID": "tenant-alpha"}).json()
+    beta_digest = client.get("/api/knowledge-digest", headers={"X-Tenant-ID": "tenant-beta"}).json()
+
+    assert [entry["retrieved_chunks"] for entry in alpha_logs] == [["alpha-chunk"]]
+    assert beta_digest["tenant_id"] == "tenant-beta"
+    assert beta_digest["top_chunks"] == ["beta-chunk"]
+
+
+@patch("app.main.classify_query", new_callable=AsyncMock)
+@patch("app.main._search_document_context")
+@patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
+def test_long_term_context_digest_is_injected_when_enabled(mock_chat, mock_search, mock_classify):
+    """When enabled, Smart Chat should include retrieval-memory digest in the generation prompt."""
+    settings.enable_long_term_context = True
+    retrieval_memory_store.log_retrieval(
+        query="premium delivery target",
+        retrieved_chunks=["chunk-a"],
+        retrieval_scores=[0.91],
+        source_used="rag",
+    )
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False,
+        confidence=0.9,
+        query_type="general",
+    )
+    mock_chat.return_value = "Here is an answer with learned context."
+
+    response = client.post(
+        "/api/chat/smart",
+        json={"message": "What should we watch next?"}
+    )
+
+    assert response.status_code == 200
+    final_messages = mock_chat.call_args[0][0]
+    assert "Retrieval memory digest:" in final_messages[0]["content"]
+    assert "premium" in final_messages[0]["content"]
     mock_search.assert_not_called()
