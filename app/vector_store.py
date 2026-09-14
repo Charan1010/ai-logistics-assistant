@@ -96,7 +96,8 @@ class VectorStore:
         self,
         query_embedding: List[float],
         n_results: int = 5,
-        document_id: Optional[str] = None
+        document_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Dict:
         """
         Search for similar chunks using vector similarity.
@@ -105,13 +106,22 @@ class VectorStore:
             query_embedding: Query embedding vector
             n_results: Number of results to return
             document_id: Optional filter by document ID
+            tenant_id: Optional filter by tenant ID
 
         Returns:
             Dict with ids, documents, distances, and metadatas
         """
         where_filter = None
+        clauses = []
         if document_id:
-            where_filter = {"document_id": document_id}
+            clauses.append({"document_id": document_id})
+        if tenant_id:
+            clauses.append({"tenant_id": tenant_id})
+
+        if len(clauses) == 1:
+            where_filter = clauses[0]
+        elif len(clauses) > 1:
+            where_filter = {"$and": clauses}
 
         results = self.collection.query(
             query_embeddings=[query_embedding],
@@ -125,7 +135,8 @@ class VectorStore:
         self,
         query_embedding: List[float],
         n_results: int = 5,
-        document_id: Optional[str] = None
+        document_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[Dict]:
         """
         Search and return ranked, flattened results with a 0.0-1.0 similarity score.
@@ -137,7 +148,7 @@ class VectorStore:
         if self.collection.count() == 0:
             return []
 
-        raw = self.search(query_embedding, n_results=n_results, document_id=document_id)
+        raw = self.search(query_embedding, n_results=n_results, document_id=document_id, tenant_id=tenant_id)
 
         ids = raw.get("ids", [[]])[0]
         documents = raw.get("documents", [[]])[0]
@@ -157,7 +168,7 @@ class VectorStore:
 
         return results
 
-    def get_document_chunks(self, document_id: str) -> List[Dict]:
+    def get_document_chunks(self, document_id: str, tenant_id: Optional[str] = None) -> List[Dict]:
         """
         Get all chunks for a specific document.
 
@@ -167,8 +178,12 @@ class VectorStore:
         Returns:
             List of chunks with their metadata
         """
+        where_filter = {"document_id": document_id}
+        if tenant_id:
+            where_filter = {"$and": [{"document_id": document_id}, {"tenant_id": tenant_id}]}
+
         results = self.collection.get(
-            where={"document_id": document_id},
+            where=where_filter,
             include=["documents", "metadatas"]
         )
 
@@ -187,7 +202,7 @@ class VectorStore:
         chunks.sort(key=lambda x: x['metadata'].get('chunk_index', 0))
         return chunks
 
-    def delete_document(self, document_id: str) -> int:
+    def delete_document(self, document_id: str, tenant_id: Optional[str] = None) -> int:
         """
         Delete all chunks for a document.
 
@@ -198,8 +213,12 @@ class VectorStore:
             Number of chunks deleted
         """
         # Get all chunk IDs for this document
+        where_filter = {"document_id": document_id}
+        if tenant_id:
+            where_filter = {"$and": [{"document_id": document_id}, {"tenant_id": tenant_id}]}
+
         results = self.collection.get(
-            where={"document_id": document_id},
+            where=where_filter,
             include=[]
         )
 
@@ -211,7 +230,7 @@ class VectorStore:
 
         return len(chunk_ids)
 
-    def list_documents(self) -> List[Dict]:
+    def list_documents(self, tenant_id: Optional[str] = None) -> List[Dict]:
         """
         List all unique documents in the store.
 
@@ -219,7 +238,10 @@ class VectorStore:
             List of document metadata
         """
         # Get all items
-        results = self.collection.get(include=["metadatas"])
+        if tenant_id:
+            results = self.collection.get(where={"tenant_id": tenant_id}, include=["metadatas"])
+        else:
+            results = self.collection.get(include=["metadatas"])
 
         if not results['metadatas']:
             return []
@@ -233,15 +255,16 @@ class VectorStore:
                     "document_id": doc_id,
                     "filename": metadata.get('filename'),
                     "upload_date": metadata.get('upload_date'),
-                    "total_chunks": metadata.get('total_chunks', 0)
+                    "total_chunks": metadata.get('total_chunks', 0),
+                    "tenant_id": metadata.get('tenant_id'),
                 }
 
         return list(docs_dict.values())
 
-    def get_stats(self) -> Dict:
+    def get_stats(self, tenant_id: Optional[str] = None) -> Dict:
         """Get collection statistics."""
-        count = self.collection.count()
-        documents = self.list_documents()
+        documents = self.list_documents(tenant_id=tenant_id)
+        count = sum(doc.get("total_chunks", 0) for doc in documents) if tenant_id else self.collection.count()
 
         return {
             "total_chunks": count,
