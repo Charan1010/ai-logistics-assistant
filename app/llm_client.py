@@ -97,6 +97,28 @@ class LLMClient:
 
         return LLMResponse(content=content, tool_calls=tool_calls)
 
+    async def chat_json(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
+        """
+        Send chat messages with Ollama's JSON output mode enabled.
+
+        Ollama's `format: "json"` forces the model to emit valid JSON. Used by the
+        Feature 8 planner where we need a parseable list of steps.
+        """
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": False,
+                    "format": "json",
+                    "options": {"temperature": temperature},
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result["message"]["content"]
+
 
 # Global LLM client instance
 llm_client = LLMClient()

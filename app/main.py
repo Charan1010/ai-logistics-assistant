@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -41,6 +41,10 @@ from app.models import (
     AgentRequest,
     AgentResponse,
     AgentStep,
+    PlanRequest,
+    PlanResponse,
+    PlanStepResult,
+    AgentTaskResponse,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -50,6 +54,8 @@ from app.embeddings import get_embedding_model
 from app.retrieval_memory import retrieval_memory_store
 from app.vector_store import get_vector_store
 from app.agent import run_agent, TOOLS_REGISTRY
+from app.planner import make_plan, execute_plan
+from app.task_store import task_store
 
 app = FastAPI(
     title=settings.app_name,
@@ -1030,6 +1036,77 @@ async def agent_run(request: AgentRequest, x_tenant_id: str | None = Header(defa
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
+
+
+# Multi-Step Agent Endpoints (Feature 8)
+
+def _task_to_response(task) -> AgentTaskResponse:
+    return AgentTaskResponse(
+        task_id=task.task_id,
+        status=task.status,
+        message=task.message,
+        plan=task.plan or [],
+        steps_completed=[PlanStepResult(**step) for step in task.steps_completed or []],
+        result=task.result,
+        error=task.error,
+        session_id=task.session_id,
+    )
+
+
+@app.post("/api/agent/plan", response_model=PlanResponse)
+async def agent_plan(
+    request: PlanRequest,
+    background_tasks: BackgroundTasks,
+    x_tenant_id: str | None = Header(default=None),
+):
+    """
+    Decompose the request into steps and start executing them in the background.
+    Client polls /api/agent/status/{task_id} for progress.
+    """
+    try:
+        tenant_id = _tenant_from_header(x_tenant_id) if request.session_id else None
+        if request.session_id:
+            _assert_session_access(request.session_id, tenant_id)
+
+        task = task_store.create_task(
+            message=request.message,
+            session_id=request.session_id,
+            tenant_id=tenant_id,
+        )
+
+        plan = await make_plan(request.message)
+        task_store.update_task(task.task_id, plan=plan, status="executing")
+
+        background_tasks.add_task(execute_plan, task.task_id)
+
+        return PlanResponse(
+            task_id=task.task_id,
+            status="executing",
+            plan=plan,
+            session_id=request.session_id,
+        )
+
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=503, detail=f"LLM service unavailable: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Planner error: {str(e)}")
+
+
+@app.get("/api/agent/status/{task_id}", response_model=AgentTaskResponse)
+async def agent_status(task_id: str, x_tenant_id: str | None = Header(default=None)):
+    """Poll a multi-step task's live progress."""
+    task = task_store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    if task.tenant_id is not None:
+        tenant_id = _tenant_from_header(x_tenant_id)
+        if tenant_id != task.tenant_id:
+            raise HTTPException(status_code=403, detail="Cross-tenant task access denied")
+
+    return _task_to_response(task)
 
 
 if __name__ == "__main__":

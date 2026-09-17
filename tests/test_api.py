@@ -1162,3 +1162,122 @@ def test_agent_blocks_cross_tenant_session(mock_chat_with_tools):
 
     assert response.status_code == 403
     mock_chat_with_tools.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Feature 8: Multi-Step Agent (Plan-and-Execute)
+# ---------------------------------------------------------------------------
+
+@patch("app.planner.llm_client.chat", new_callable=AsyncMock)
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+@patch("app.planner.llm_client.chat_json", new_callable=AsyncMock)
+def test_agent_plan_creates_task_and_executes_all_steps(mock_plan_json, mock_chat_with_tools, mock_synth):
+    """/api/agent/plan should return a plan, execute every step, and populate final result."""
+    from app.llm_client import LLMResponse, ToolCall
+
+    mock_plan_json.return_value = (
+        '{"steps": ["Check shipment TRK-42", "Look up KPIs for the Chicago warehouse"]}'
+    )
+    mock_chat_with_tools.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="check_shipment_status", arguments={"tracking_number": "TRK-42"})],
+        ),
+        LLMResponse(content="TRK-42 is currently in transit.", tool_calls=[]),
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="lookup_warehouse_info", arguments={"warehouse": "Chicago"})],
+        ),
+        LLMResponse(content="Chicago warehouse is at 84% capacity.", tool_calls=[]),
+    ]
+    mock_synth.return_value = "TRK-42 is in transit and Chicago is at 84% capacity."
+
+    response = client.post(
+        "/api/agent/plan",
+        json={"message": "Check TRK-42 then Chicago KPIs"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "executing"
+    assert len(data["plan"]) == 2
+    assert data["task_id"]
+
+    status = client.get(f"/api/agent/status/{data['task_id']}").json()
+    assert status["status"] == "done"
+    assert len(status["steps_completed"]) == 2
+    assert status["steps_completed"][0]["tools_used"] == ["check_shipment_status"]
+    assert status["steps_completed"][1]["tools_used"] == ["lookup_warehouse_info"]
+    assert status["result"] == "TRK-42 is in transit and Chicago is at 84% capacity."
+    assert mock_synth.call_count == 1
+
+
+@patch("app.planner.llm_client.chat", new_callable=AsyncMock)
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+@patch("app.planner.llm_client.chat_json", new_callable=AsyncMock)
+def test_agent_plan_falls_back_to_single_step_on_bad_json(mock_plan_json, mock_chat_with_tools, mock_synth):
+    """When the planner returns malformed JSON, the plan should fall back to a single step."""
+    from app.llm_client import LLMResponse
+
+    mock_plan_json.return_value = "this is not valid json"
+    mock_chat_with_tools.return_value = LLMResponse(content="handled", tool_calls=[])
+    mock_synth.return_value = "final answer"
+
+    response = client.post("/api/agent/plan", json={"message": "Do something"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["plan"] == ["Do something"]
+
+
+@patch("app.planner.llm_client.chat", new_callable=AsyncMock)
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+@patch("app.planner.llm_client.chat_json", new_callable=AsyncMock)
+def test_agent_plan_reports_error_status_when_step_fails(mock_plan_json, mock_chat_with_tools, mock_synth):
+    """If an executor step raises, the task should transition to status='error'."""
+    mock_plan_json.return_value = '{"steps": ["Step one"]}'
+    mock_chat_with_tools.side_effect = RuntimeError("ollama down")
+
+    response = client.post("/api/agent/plan", json={"message": "trigger failure"})
+    assert response.status_code == 200
+    task_id = response.json()["task_id"]
+
+    status = client.get(f"/api/agent/status/{task_id}").json()
+    assert status["status"] == "error"
+    assert "ollama down" in status["error"]
+    mock_synth.assert_not_called()
+
+
+def test_agent_status_returns_404_for_unknown_task():
+    response = client.get("/api/agent/status/does-not-exist")
+    assert response.status_code == 404
+
+
+@patch("app.planner.llm_client.chat", new_callable=AsyncMock)
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+@patch("app.planner.llm_client.chat_json", new_callable=AsyncMock)
+def test_agent_status_blocks_cross_tenant_access(mock_plan_json, mock_chat_with_tools, mock_synth):
+    """Multi-step task created under tenant-alpha must not be readable by tenant-beta."""
+    from app.llm_client import LLMResponse
+
+    settings.enable_multi_tenant = True
+    mock_plan_json.return_value = '{"steps": ["do the thing"]}'
+    mock_chat_with_tools.return_value = LLMResponse(content="done", tool_calls=[])
+    mock_synth.return_value = "final"
+
+    session_id = client.post(
+        "/api/sessions", json={}, headers={"X-Tenant-ID": "tenant-alpha"}
+    ).json()["session_id"]
+
+    plan_response = client.post(
+        "/api/agent/plan",
+        json={"message": "Do something", "session_id": session_id},
+        headers={"X-Tenant-ID": "tenant-alpha"},
+    )
+    assert plan_response.status_code == 200
+    task_id = plan_response.json()["task_id"]
+
+    cross = client.get(f"/api/agent/status/{task_id}", headers={"X-Tenant-ID": "tenant-beta"})
+    assert cross.status_code == 403
+
+    same = client.get(f"/api/agent/status/{task_id}", headers={"X-Tenant-ID": "tenant-alpha"})
+    assert same.status_code == 200
