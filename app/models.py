@@ -211,3 +211,26 @@ class KnowledgeDigest(BaseModel):
 class RetrievalFeedbackRequest(BaseModel):
     """Feedback payload for a retrieval log entry."""
     was_helpful: bool
+
+
+# Agent Models (Feature 7)
+
+class AgentRequest(BaseModel):
+    """Request model for the logistics agent."""
+    message: str = Field(..., min_length=1, description="User's message to the agent")
+    session_id: Optional[str] = Field(None, description="Optional session ID for conversation history")
+
+
+class AgentStep(BaseModel):
+    """One tool execution step performed by the agent."""
+    tool: str = Field(..., description="Name of the tool that was called")
+    args: dict = Field(default_factory=dict, description="Arguments the model chose for the tool")
+    result: dict = Field(default_factory=dict, description="Structured result returned by the tool")
+
+
+class AgentResponse(BaseModel):
+    """Response model for the logistics agent."""
+    result: str = Field(..., description="Final natural-language answer from the agent")
+    steps: List[AgentStep] = Field(default_factory=list, description="Audit trail of tool executions")
+    tools_used: List[str] = Field(default_factory=list, description="Names of tools the agent called")
+    model: str = Field(..., description="LLM model used for generation")

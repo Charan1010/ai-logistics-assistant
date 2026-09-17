@@ -26,8 +26,8 @@ Executive-level AI assistant that understands logistics operations, provides rea
   - Optional multi-tenant isolation with `X-Tenant-ID` scoped sessions, documents, and searches
   - Optional retrieval memory digest that learns from prior RAG/hybrid retrievals
 
-### Phase 4: Intelligence (Planned)
-- [ ] **Feature 7: Basic Agent** - Function calling and tool use
+### Phase 4: Intelligence (in progress)
+- [x] **Feature 7: Basic Agent** - Tool calling with 4 logistics tools and transparent audit trail
 - [ ] **Feature 8: Multi-Step Agent** - Complex task decomposition
 - [ ] **Feature 9: MCP Integration** - Model Context Protocol for external tools
 
@@ -101,6 +101,7 @@ uvicorn app.main:app --reload --port 8000
 5. **Documents tab** - drag-and-drop or click to upload PDF/TXT/DOCX files; view live chunk/document counts
 6. **Search tab** - ask a question and get ranked, scored chunks from your uploaded documents (optionally scoped to one document)
 7. **Memory tab** - inspect retrieval logs, top chunks, query patterns, coverage gaps, and mark retrievals helpful/unhelpful
+8. **Agent tab** - ask the logistics agent to check shipments, estimate delivery, open tickets, or look up warehouse KPIs — see the audit trail of every tool it calls
 
 When `ENABLE_MULTI_TENANT=true`, the top bar shows tenant mode as `isolated`. Type a tenant name like `tenant-alpha`, click **Switch**, and the UI reloads sessions/documents/search filters for that tenant. Recently used tenants appear in the tenant dropdown; the backend does not expose a global tenant registry, so this list is stored locally in your browser.
 
@@ -173,6 +174,31 @@ curl -X POST http://localhost:8000/api/retrieval-logs/<entry-id>/feedback \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: tenant-alpha" \
   -d '{"was_helpful": false}'
+
+# Logistics agent with tool calling (Feature 7)
+curl http://localhost:8000/api/agent/tools
+
+curl -X POST http://localhost:8000/api/agent/run \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: tenant-alpha" \
+  -d '{"message": "Where is my shipment TRK-42?"}'
+```
+
+Agent response shape:
+
+```json
+{
+  "result": "Your shipment TRK-42 is in transit with FedEx Freight...",
+  "steps": [
+    {
+      "tool": "check_shipment_status",
+      "args": {"tracking_number": "TRK-42"},
+      "result": {"status": "in_transit", "carrier": "FedEx Freight", "..." : "..."}
+    }
+  ],
+  "tools_used": ["check_shipment_status"],
+  "model": "qwen2.5:3b"
+}
 ```
 
 Structured response shape:

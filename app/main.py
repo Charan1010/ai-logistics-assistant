@@ -38,6 +38,9 @@ from app.models import (
     RetrievalLogEntry,
     SmartChatRequest,
     SmartChatResponse,
+    AgentRequest,
+    AgentResponse,
+    AgentStep,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -46,6 +49,7 @@ from app.document_processor import get_document_processor
 from app.embeddings import get_embedding_model
 from app.retrieval_memory import retrieval_memory_store
 from app.vector_store import get_vector_store
+from app.agent import run_agent, TOOLS_REGISTRY
 
 app = FastAPI(
     title=settings.app_name,
@@ -351,7 +355,7 @@ async def status():
         "status": "online",
         "app": settings.app_name,
         "version": "0.1.0",
-        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion", "semantic_search", "smart_router", "retrieval_memory"],
+        "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion", "semantic_search", "smart_router", "retrieval_memory", "agent_tools"],
         "model": llm_client.model,
         "multi_tenant": settings.enable_multi_tenant,
         "long_term_context": settings.enable_long_term_context,
@@ -977,6 +981,55 @@ async def retrieval_feedback(entry_id: str, request: RetrievalFeedbackRequest, x
     if entry is None:
         raise HTTPException(status_code=404, detail="Retrieval log entry not found")
     return entry
+
+
+# Agent Endpoints (Feature 7)
+
+@app.get("/api/agent/tools")
+async def list_agent_tools():
+    """Return the tool schemas the agent can invoke."""
+    return {
+        "tools": [
+            {
+                "name": name,
+                "description": schema["function"]["description"],
+                "parameters": schema["function"]["parameters"],
+            }
+            for name, (_, schema) in TOOLS_REGISTRY.items()
+        ],
+        "total": len(TOOLS_REGISTRY),
+    }
+
+
+@app.post("/api/agent/run", response_model=AgentResponse)
+async def agent_run(request: AgentRequest, x_tenant_id: str | None = Header(default=None)):
+    """
+    Run one agent turn: LLM chooses tools, we execute them, LLM synthesises answer.
+    """
+    try:
+        tenant_id = _tenant_from_header(x_tenant_id) if request.session_id else None
+        if request.session_id:
+            _assert_session_access(request.session_id, tenant_id)
+
+        agent_output = await run_agent(request.message, session_id=request.session_id)
+
+        if request.session_id:
+            session_store.add_message(request.session_id, "user", request.message)
+            session_store.add_message(request.session_id, "assistant", agent_output["result"])
+
+        return AgentResponse(
+            result=agent_output["result"],
+            steps=[AgentStep(**step) for step in agent_output["steps"]],
+            tools_used=agent_output["tools_used"],
+            model=llm_client.model,
+        )
+
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=503, detail=f"LLM service unavailable: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
 
 
 if __name__ == "__main__":
