@@ -1028,3 +1028,137 @@ def test_long_term_context_digest_is_injected_when_enabled(mock_chat, mock_searc
     assert "Retrieval memory digest:" in final_messages[0]["content"]
     assert "premium" in final_messages[0]["content"]
     mock_search.assert_not_called()
+
+
+# Feature 7: Logistics Agent Tests
+
+def test_agent_tools_endpoint_lists_all_tools():
+    """/api/agent/tools should expose all four logistics tools."""
+    response = client.get("/api/agent/tools")
+
+    assert response.status_code == 200
+    data = response.json()
+    tool_names = {tool["name"] for tool in data["tools"]}
+    assert tool_names == {
+        "check_shipment_status",
+        "estimate_delivery",
+        "create_shipping_ticket",
+        "lookup_warehouse_info",
+    }
+    assert data["total"] == 4
+
+
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_returns_direct_answer_when_no_tool_calls(mock_chat_with_tools):
+    """When the LLM answers directly, no tools should be executed."""
+    from app.llm_client import LLMResponse
+
+    mock_chat_with_tools.return_value = LLMResponse(content="Delivery windows depend on lane and mode.", tool_calls=[])
+
+    response = client.post(
+        "/api/agent/run",
+        json={"message": "What is a delivery window?"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["result"] == "Delivery windows depend on lane and mode."
+    assert data["steps"] == []
+    assert data["tools_used"] == []
+    # Only one LLM call is needed when no tools are used.
+    assert mock_chat_with_tools.call_count == 1
+
+
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_executes_shipment_status_tool(mock_chat_with_tools):
+    """Agent should execute the tool the model chose and synthesise an answer."""
+    from app.llm_client import LLMResponse, ToolCall
+
+    mock_chat_with_tools.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="check_shipment_status", arguments={"tracking_number": "TRK-42"})],
+        ),
+        LLMResponse(content="Your shipment TRK-42 is currently in transit.", tool_calls=[]),
+    ]
+
+    response = client.post(
+        "/api/agent/run",
+        json={"message": "Where is my shipment TRK-42?"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tools_used"] == ["check_shipment_status"]
+    assert data["steps"][0]["tool"] == "check_shipment_status"
+    assert data["steps"][0]["args"] == {"tracking_number": "TRK-42"}
+    assert data["steps"][0]["result"]["tracking_number"] == "TRK-42"
+    assert "in transit" in data["result"].lower()
+    assert mock_chat_with_tools.call_count == 2
+
+
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_reports_unknown_tool_gracefully(mock_chat_with_tools):
+    """If the LLM invents a tool name, the agent should report an error step rather than crash."""
+    from app.llm_client import LLMResponse, ToolCall
+
+    mock_chat_with_tools.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="teleport_shipment", arguments={"foo": "bar"})],
+        ),
+        LLMResponse(content="I could not complete that action.", tool_calls=[]),
+    ]
+
+    response = client.post(
+        "/api/agent/run",
+        json={"message": "Teleport my shipment"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tools_used"] == ["teleport_shipment"]
+    assert "Unknown tool" in data["steps"][0]["result"]["error"]
+
+
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_persists_messages_when_session_provided(mock_chat_with_tools):
+    """Agent turns should be saved in session history when session_id is provided."""
+    from app.llm_client import LLMResponse
+
+    mock_chat_with_tools.return_value = LLMResponse(content="Recorded.", tool_calls=[])
+
+    create_response = client.post("/api/sessions", json={})
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        "/api/agent/run",
+        json={"message": "Log a note about the Chicago dock.", "session_id": session_id}
+    )
+
+    assert response.status_code == 200
+    history = client.get(f"/api/sessions/{session_id}/history").json()
+    assert history["total"] == 2
+    assert history["messages"][0]["role"] == "user"
+    assert history["messages"][1]["role"] == "assistant"
+
+
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_blocks_cross_tenant_session(mock_chat_with_tools):
+    """Agent must enforce tenant ownership before running any tools."""
+    from app.llm_client import LLMResponse
+
+    settings.enable_multi_tenant = True
+    mock_chat_with_tools.return_value = LLMResponse(content="should not be returned", tool_calls=[])
+
+    create_response = client.post("/api/sessions", json={}, headers={"X-Tenant-ID": "tenant-alpha"})
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        "/api/agent/run",
+        json={"message": "Track my shipment", "session_id": session_id},
+        headers={"X-Tenant-ID": "tenant-beta"},
+    )
+
+    assert response.status_code == 403
+    mock_chat_with_tools.assert_not_called()

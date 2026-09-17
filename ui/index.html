@@ -281,6 +281,7 @@
             <button class="tab-btn" data-tab="documents" onclick="switchTab('documents')">📄 Documents</button>
             <button class="tab-btn" data-tab="search" onclick="switchTab('search')">🔍 Search</button>
             <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">🧠 Memory</button>
+            <button class="tab-btn" data-tab="agent" onclick="switchTab('agent')">🛠️ Agent</button>
         </div>
     </div>
 
@@ -412,6 +413,29 @@
                 </div>
             </div>
         </div>
+
+        <!-- AGENT PANEL -->
+        <div class="panel" id="panel-agent">
+            <div class="structured-body">
+                <div class="structured-card">
+                    <h3>Logistics Agent</h3>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                        Ask the agent to check shipment status, estimate delivery, open a ticket, or look up warehouse KPIs. It picks the right tool automatically.
+                    </p>
+                    <div class="input-wrapper">
+                        <input type="text" id="agentInput" placeholder="e.g. Where is my shipment TRK-42?" onkeypress="handleAgentKeyPress(event)">
+                        <button class="primary" id="agentButton" onclick="sendAgentMessage()">Run</button>
+                    </div>
+                </div>
+                <div id="agentOutput">
+                    <p class="empty-hint">Try: "Estimate delivery from Memphis to Chicago" or "Give me KPIs for the Dallas warehouse".</p>
+                </div>
+                <div class="structured-card">
+                    <h3>Available Tools</h3>
+                    <div id="agentToolsList"><p style="color:var(--text-muted);font-size:13px;">Loading tools...</p></div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -505,6 +529,7 @@ function switchTab(tab) {
     if (tab === 'search') refreshDocumentFilterOptions();
     if (tab === 'smart') refreshSmartDocumentFilterOptions();
     if (tab === 'memory') refreshRetrievalMemory();
+    if (tab === 'agent') refreshAgentTools();
 }
 
 /* ---------------- Status ---------------- */
@@ -1117,6 +1142,106 @@ async function sendRetrievalFeedback(entryId, wasHelpful) {
         showToast(error.message, true);
     }
 }
+
+/* ---------------- Agent tab ---------------- */
+async function refreshAgentTools() {
+    try {
+        const response = await fetch(`${API_URL}/api/agent/tools`, { headers: tenantHeaders() });
+        const data = await response.json();
+        const container = document.getElementById('agentToolsList');
+        if (!data.tools || !data.tools.length) {
+            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">No tools registered.</p>';
+            return;
+        }
+        container.innerHTML = data.tools.map(() => `
+            <div class="search-result">
+                <div class="search-result-head">
+                    <span class="source-badge" data-slot="tool-name"></span>
+                </div>
+                <div class="search-result-text" data-slot="tool-desc"></div>
+            </div>
+        `).join('');
+        const cards = container.querySelectorAll('.search-result');
+        data.tools.forEach((tool, index) => {
+            cards[index].querySelector('[data-slot="tool-name"]').textContent = tool.name;
+            cards[index].querySelector('[data-slot="tool-desc"]').textContent = tool.description;
+        });
+    } catch (error) {
+        // silent
+    }
+}
+
+function renderAgentOutput(data) {
+    const container = document.getElementById('agentOutput');
+    container.innerHTML = `
+        <div class="structured-card">
+            <h3>Agent Answer</h3>
+            <p data-slot="answer" style="font-size:14px;line-height:1.6;white-space:pre-wrap;"></p>
+            <div class="audit-grid" style="margin-top:12px;">
+                <div class="audit-item"><div class="label">Tools Used</div><div class="value" data-slot="tools_count"></div></div>
+                <div class="audit-item"><div class="label">Model</div><div class="value" data-slot="model" style="font-size:12px;"></div></div>
+            </div>
+        </div>
+        <div class="structured-card">
+            <h3>Tool Execution Steps</h3>
+            <div data-slot="steps"><p style="color:var(--text-muted);font-size:13px;">No tools were called.</p></div>
+        </div>`;
+
+    container.querySelector('[data-slot="answer"]').textContent = data.result || '(no answer)';
+    container.querySelector('[data-slot="tools_count"]').textContent = data.tools_used.length;
+    container.querySelector('[data-slot="model"]').textContent = data.model;
+
+    const stepsSlot = container.querySelector('[data-slot="steps"]');
+    if (data.steps && data.steps.length) {
+        stepsSlot.innerHTML = data.steps.map((step, index) => `
+            <div class="search-result" style="margin-bottom:10px;">
+                <div class="search-result-head">
+                    <span class="source-badge">${index + 1}. ${step.tool}</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Args:</div>
+                <div class="search-result-text" data-slot="step-args-${index}" style="font-family:monospace;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;"></div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Result:</div>
+                <div class="search-result-text" data-slot="step-result-${index}" style="font-family:monospace;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;"></div>
+            </div>
+        `).join('');
+        data.steps.forEach((step, index) => {
+            stepsSlot.querySelector(`[data-slot="step-args-${index}"]`).textContent = JSON.stringify(step.args, null, 2);
+            stepsSlot.querySelector(`[data-slot="step-result-${index}"]`).textContent = JSON.stringify(step.result, null, 2);
+        });
+    }
+}
+
+async function sendAgentMessage() {
+    const input = document.getElementById('agentInput');
+    const button = document.getElementById('agentButton');
+    const message = input.value.trim();
+    if (!message) return;
+
+    input.disabled = true;
+    button.disabled = true;
+    button.textContent = 'Running...';
+    document.getElementById('agentOutput').innerHTML = '<p class="empty-hint">Agent is choosing tools and executing...</p>';
+
+    try {
+        const response = await fetch(`${API_URL}/api/agent/run`, {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ message, session_id: currentSessionId })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Agent failed');
+        renderAgentOutput(data);
+        await loadSessionsList();
+    } catch (error) {
+        document.getElementById('agentOutput').innerHTML = '<p class="empty-hint">Agent failed. Please try again.</p>';
+        showToast(error.message, true);
+    } finally {
+        input.disabled = false;
+        button.disabled = false;
+        button.textContent = 'Run';
+    }
+}
+function handleAgentKeyPress(event) { if (event.key === 'Enter') sendAgentMessage(); }
 
 /* ---------------- Init ---------------- */
 document.getElementById('tenantInput').value = currentTenantId;
