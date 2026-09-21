@@ -234,3 +234,39 @@ class AgentResponse(BaseModel):
     steps: List[AgentStep] = Field(default_factory=list, description="Audit trail of tool executions")
     tools_used: List[str] = Field(default_factory=list, description="Names of tools the agent called")
     model: str = Field(..., description="LLM model used for generation")
+
+
+# Multi-Step Agent Models (Feature 8)
+
+class PlanRequest(BaseModel):
+    """Request to plan and execute a multi-step agent task."""
+    message: str = Field(..., min_length=1, description="Complex user request")
+    session_id: Optional[str] = Field(None, description="Optional session ID for conversation history")
+
+
+class PlanStepResult(BaseModel):
+    """Result of a single planned step after execution."""
+    step_index: int = Field(..., description="0-based index within the plan")
+    step: str = Field(..., description="The natural-language step instruction")
+    result: str = Field("", description="Final answer produced by the agent for this step")
+    tools_used: List[str] = Field(default_factory=list, description="Tools invoked during this step")
+
+
+class AgentTaskResponse(BaseModel):
+    """Live view of a multi-step agent task, used by the polling endpoint."""
+    task_id: str
+    status: Literal["planning", "executing", "done", "error"]
+    message: str
+    plan: List[str] = Field(default_factory=list)
+    steps_completed: List[PlanStepResult] = Field(default_factory=list)
+    result: Optional[str] = None
+    error: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class PlanResponse(BaseModel):
+    """Immediate response from POST /api/agent/plan — task created, execution kicked off."""
+    task_id: str
+    status: Literal["planning", "executing", "done", "error"]
+    plan: List[str]
+    session_id: Optional[str] = None

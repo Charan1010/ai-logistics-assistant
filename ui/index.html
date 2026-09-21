@@ -422,13 +422,20 @@
                     <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
                         Ask the agent to check shipment status, estimate delivery, open a ticket, or look up warehouse KPIs. It picks the right tool automatically.
                     </p>
+                    <div style="display:flex;gap:8px;margin-bottom:12px;">
+                        <button class="secondary" id="agentModeSingle" onclick="setAgentMode('single')" style="flex:1;">Single-Step</button>
+                        <button class="secondary" id="agentModeMulti" onclick="setAgentMode('multi')" style="flex:1;">Multi-Step</button>
+                    </div>
                     <div class="input-wrapper">
                         <input type="text" id="agentInput" placeholder="e.g. Where is my shipment TRK-42?" onkeypress="handleAgentKeyPress(event)">
                         <button class="primary" id="agentButton" onclick="sendAgentMessage()">Run</button>
                     </div>
+                    <p id="agentModeHint" style="font-size:12px;color:var(--text-muted);margin-top:8px;">
+                        Single-Step: one tool call per request. Multi-Step: agent plans 2–5 steps, executes each, synthesizes final answer.
+                    </p>
                 </div>
                 <div id="agentOutput">
-                    <p class="empty-hint">Try: "Estimate delivery from Memphis to Chicago" or "Give me KPIs for the Dallas warehouse".</p>
+                    <p class="empty-hint">Try: "Estimate delivery from Memphis to Chicago" or (Multi-Step) "Check shipment TRK-42, look up Chicago KPIs, and open a low-priority ticket summarizing both".</p>
                 </div>
                 <div class="structured-card">
                     <h3>Available Tools</h3>
@@ -529,7 +536,7 @@ function switchTab(tab) {
     if (tab === 'search') refreshDocumentFilterOptions();
     if (tab === 'smart') refreshSmartDocumentFilterOptions();
     if (tab === 'memory') refreshRetrievalMemory();
-    if (tab === 'agent') refreshAgentTools();
+    if (tab === 'agent') { refreshAgentTools(); setAgentMode(agentMode || 'single'); }
 }
 
 /* ---------------- Status ---------------- */
@@ -1220,18 +1227,22 @@ async function sendAgentMessage() {
     input.disabled = true;
     button.disabled = true;
     button.textContent = 'Running...';
-    document.getElementById('agentOutput').innerHTML = '<p class="empty-hint">Agent is choosing tools and executing...</p>';
 
     try {
-        const response = await fetch(`${API_URL}/api/agent/run`, {
-            method: 'POST',
-            headers: jsonHeaders(),
-            body: JSON.stringify({ message, session_id: currentSessionId })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || 'Agent failed');
-        renderAgentOutput(data);
-        await loadSessionsList();
+        if (agentMode === 'multi') {
+            await runMultiStepAgent(message);
+        } else {
+            document.getElementById('agentOutput').innerHTML = '<p class="empty-hint">Agent is choosing tools and executing...</p>';
+            const response = await fetch(`${API_URL}/api/agent/run`, {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({ message, session_id: currentSessionId })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Agent failed');
+            renderAgentOutput(data);
+            await loadSessionsList();
+        }
     } catch (error) {
         document.getElementById('agentOutput').innerHTML = '<p class="empty-hint">Agent failed. Please try again.</p>';
         showToast(error.message, true);
@@ -1240,6 +1251,91 @@ async function sendAgentMessage() {
         button.disabled = false;
         button.textContent = 'Run';
     }
+}
+
+let agentMode = 'single';
+
+function setAgentMode(mode) {
+    agentMode = mode;
+    const single = document.getElementById('agentModeSingle');
+    const multi = document.getElementById('agentModeMulti');
+    if (mode === 'multi') {
+        multi.classList.add('primary'); multi.classList.remove('secondary');
+        single.classList.add('secondary'); single.classList.remove('primary');
+    } else {
+        single.classList.add('primary'); single.classList.remove('secondary');
+        multi.classList.add('secondary'); multi.classList.remove('primary');
+    }
+}
+
+async function runMultiStepAgent(message) {
+    document.getElementById('agentOutput').innerHTML = '<p class="empty-hint">Planning steps...</p>';
+
+    const planResponse = await fetch(`${API_URL}/api/agent/plan`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ message, session_id: currentSessionId })
+    });
+    const planData = await planResponse.json();
+    if (!planResponse.ok) throw new Error(planData.detail || 'Planner failed');
+
+    const taskId = planData.task_id;
+    renderMultiStepTask({ ...planData, status: 'executing', steps_completed: [], message });
+
+    while (true) {
+        await new Promise(r => setTimeout(r, 1500));
+        const statusResponse = await fetch(`${API_URL}/api/agent/status/${taskId}`, { headers: tenantHeaders() });
+        const statusData = await statusResponse.json();
+        if (!statusResponse.ok) throw new Error(statusData.detail || 'Status poll failed');
+
+        renderMultiStepTask(statusData);
+        if (statusData.status === 'done' || statusData.status === 'error') break;
+    }
+    await loadSessionsList();
+}
+
+function renderMultiStepTask(task) {
+    const container = document.getElementById('agentOutput');
+    const planHtml = (task.plan || []).map((step, i) => {
+        const done = (task.steps_completed || []).find(s => s.step_index === i);
+        const icon = done ? '✅' : (task.status === 'executing' && i === (task.steps_completed || []).length ? '⏳' : '⚪');
+        const detail = done ? `
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+                Tools: <code>${(done.tools_used || []).join(', ') || 'none'}</code>
+            </div>
+            <div style="font-size:12px;margin-top:4px;">${escapeHtml(done.result || '')}</div>
+        ` : '';
+        return `
+            <div style="padding:10px;border-left:3px solid ${done ? '#22c55e' : '#e5e7eb'};margin-bottom:8px;background:#f8fafc;border-radius:4px;">
+                <div><strong>${icon} Step ${i + 1}:</strong> ${escapeHtml(step)}</div>
+                ${detail}
+            </div>
+        `;
+    }).join('');
+
+    const finalHtml = task.status === 'done' ? `
+        <div class="structured-card" style="margin-top:12px;background:#f0fdf4;border-color:#86efac;">
+            <h3>Final Answer</h3>
+            <p style="white-space:pre-wrap;">${escapeHtml(task.result || '')}</p>
+        </div>
+    ` : task.status === 'error' ? `
+        <div class="structured-card" style="margin-top:12px;background:#fef2f2;border-color:#fca5a5;">
+            <h3>Error</h3>
+            <p>${escapeHtml(task.error || 'Unknown error')}</p>
+        </div>
+    ` : '';
+
+    container.innerHTML = `
+        <div class="structured-card">
+            <h3>Plan (${task.status})</h3>
+            ${planHtml || '<p class="empty-hint">No plan yet.</p>'}
+        </div>
+        ${finalHtml}
+    `;
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function handleAgentKeyPress(event) { if (event.key === 'Enter') sendAgentMessage(); }
 

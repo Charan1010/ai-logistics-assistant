@@ -28,7 +28,7 @@ Executive-level AI assistant that understands logistics operations, provides rea
 
 ### Phase 4: Intelligence (in progress)
 - [x] **Feature 7: Basic Agent** - Tool calling with 4 logistics tools and transparent audit trail
-- [ ] **Feature 8: Multi-Step Agent** - Complex task decomposition
+- [x] **Feature 8: Multi-Step Agent** - Plan-and-Execute task decomposition with background execution + polling
 - [ ] **Feature 9: MCP Integration** - Model Context Protocol for external tools
 
 ### Phase 5: Production (Planned)
@@ -182,6 +182,14 @@ curl -X POST http://localhost:8000/api/agent/run \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: tenant-alpha" \
   -d '{"message": "Where is my shipment TRK-42?"}'
+
+# Multi-step agent (Feature 8) - plan + execute in the background
+curl -X POST http://localhost:8000/api/agent/plan \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Check shipment TRK-42, look up Chicago warehouse KPIs, then open a low-priority ticket summarizing both findings."}'
+
+# Poll for progress (returns status, plan, steps_completed, result)
+curl http://localhost:8000/api/agent/status/<task_id>
 ```
 
 Agent response shape:
