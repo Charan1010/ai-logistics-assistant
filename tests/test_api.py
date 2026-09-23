@@ -1281,3 +1281,129 @@ def test_agent_status_blocks_cross_tenant_access(mock_plan_json, mock_chat_with_
 
     same = client.get(f"/api/agent/status/{task_id}", headers={"X-Tenant-ID": "tenant-alpha"})
     assert same.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Feature 9: MCP Integration
+# ---------------------------------------------------------------------------
+
+_MCP_MOCK_TOOLS = [
+    {
+        "name": "check_customs_status",
+        "description": "Return customs clearance state.",
+        "server": "demo",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"tracking_number": {"type": "string"}},
+            "required": ["tracking_number"],
+        },
+    },
+    {
+        "name": "get_fuel_surcharge",
+        "description": "Return fuel surcharge for a region.",
+        "server": "demo",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"region": {"type": "string"}},
+            "required": ["region"],
+        },
+    },
+]
+
+
+def test_mcp_servers_endpoint_lists_registry():
+    response = client.get("/api/mcp/servers")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] >= 1
+    assert any(s["name"] == "demo" for s in data["servers"])
+
+
+@patch("app.main.list_mcp_tools", new_callable=AsyncMock)
+def test_mcp_tools_endpoint_lists_tools(mock_list):
+    mock_list.return_value = _MCP_MOCK_TOOLS
+    response = client.get("/api/mcp/tools")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    names = {t["name"] for t in data["tools"]}
+    assert names == {"check_customs_status", "get_fuel_surcharge"}
+
+
+@patch("app.main.call_mcp_tool", new_callable=AsyncMock)
+def test_mcp_execute_endpoint_invokes_tool(mock_call):
+    mock_call.return_value = {"tracking_number": "TRK-42", "customs_state": "cleared"}
+    response = client.post(
+        "/api/mcp/execute",
+        json={"tool_name": "check_customs_status", "arguments": {"tracking_number": "TRK-42"}},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tool_name"] == "check_customs_status"
+    assert data["result"]["customs_state"] == "cleared"
+    mock_call.assert_awaited_once_with("check_customs_status", {"tracking_number": "TRK-42"})
+
+
+@patch("app.agent.call_mcp_tool", new_callable=AsyncMock)
+@patch("app.agent.list_mcp_tools", new_callable=AsyncMock)
+@patch("app.agent.get_mcp_tool_schemas", new_callable=AsyncMock)
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_dispatches_to_mcp_tool(mock_chat, mock_schemas, mock_list, mock_call):
+    """When the LLM picks an MCP tool, the agent should route to call_mcp_tool()."""
+    from app.llm_client import LLMResponse, ToolCall
+
+    mock_schemas.return_value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "check_customs_status",
+                "description": "[MCP:demo] customs",
+                "parameters": {"type": "object", "properties": {"tracking_number": {"type": "string"}}},
+            },
+        }
+    ]
+    mock_list.return_value = _MCP_MOCK_TOOLS
+    mock_call.return_value = {"tracking_number": "TRK-42", "customs_state": "hold_documentation"}
+
+    mock_chat.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="check_customs_status", arguments={"tracking_number": "TRK-42"})],
+        ),
+        LLMResponse(content="Your shipment is held for docs.", tool_calls=[]),
+    ]
+
+    response = client.post("/api/agent/run", json={"message": "Customs status of TRK-42?"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tools_used"] == ["check_customs_status"]
+    assert data["steps"][0]["source"] == "mcp:demo"
+    assert data["steps"][0]["result"]["customs_state"] == "hold_documentation"
+    mock_call.assert_awaited_once_with("check_customs_status", {"tracking_number": "TRK-42"})
+
+
+@patch("app.agent.call_mcp_tool", new_callable=AsyncMock)
+@patch("app.agent.list_mcp_tools", new_callable=AsyncMock)
+@patch("app.agent.get_mcp_tool_schemas", new_callable=AsyncMock)
+@patch("app.agent.llm_client.chat_with_tools", new_callable=AsyncMock)
+def test_agent_still_dispatches_to_local_tool_when_mcp_available(mock_chat, mock_schemas, mock_list, mock_call):
+    """Local tools should still work even when MCP is enabled."""
+    from app.llm_client import LLMResponse, ToolCall
+
+    mock_schemas.return_value = []
+    mock_list.return_value = []
+
+    mock_chat.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="check_shipment_status", arguments={"tracking_number": "TRK-42"})],
+        ),
+        LLMResponse(content="TRK-42 is in transit.", tool_calls=[]),
+    ]
+
+    response = client.post("/api/agent/run", json={"message": "Where is TRK-42?"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tools_used"] == ["check_shipment_status"]
+    assert data["steps"][0]["source"] == "local"
+    mock_call.assert_not_awaited()

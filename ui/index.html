@@ -1153,26 +1153,34 @@ async function sendRetrievalFeedback(entryId, wasHelpful) {
 /* ---------------- Agent tab ---------------- */
 async function refreshAgentTools() {
     try {
-        const response = await fetch(`${API_URL}/api/agent/tools`, { headers: tenantHeaders() });
-        const data = await response.json();
+        const [localResp, mcpResp] = await Promise.all([
+            fetch(`${API_URL}/api/agent/tools`, { headers: tenantHeaders() }),
+            fetch(`${API_URL}/api/mcp/tools`, { headers: tenantHeaders() }),
+        ]);
+        const localData = await localResp.json();
+        const mcpData = mcpResp.ok ? await mcpResp.json() : { tools: [] };
+        const merged = [
+            ...(localData.tools || []).map(t => ({ ...t, source: 'local' })),
+            ...(mcpData.tools || []).map(t => ({ ...t, source: `mcp:${t.server}` })),
+        ];
         const container = document.getElementById('agentToolsList');
-        if (!data.tools || !data.tools.length) {
+        if (!merged.length) {
             container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">No tools registered.</p>';
             return;
         }
-        container.innerHTML = data.tools.map(() => `
-            <div class="search-result">
-                <div class="search-result-head">
-                    <span class="source-badge" data-slot="tool-name"></span>
+        container.innerHTML = merged.map(tool => {
+            const badgeColor = tool.source === 'local' ? '#e0e7ff' : '#fef3c7';
+            const badgeText = tool.source === 'local' ? 'LOCAL' : tool.source.toUpperCase();
+            return `
+                <div class="search-result">
+                    <div class="search-result-head">
+                        <span class="source-badge">${escapeHtml(tool.name)}</span>
+                        <span style="background:${badgeColor};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:8px;">${escapeHtml(badgeText)}</span>
+                    </div>
+                    <div class="search-result-text">${escapeHtml(tool.description || '')}</div>
                 </div>
-                <div class="search-result-text" data-slot="tool-desc"></div>
-            </div>
-        `).join('');
-        const cards = container.querySelectorAll('.search-result');
-        data.tools.forEach((tool, index) => {
-            cards[index].querySelector('[data-slot="tool-name"]').textContent = tool.name;
-            cards[index].querySelector('[data-slot="tool-desc"]').textContent = tool.description;
-        });
+            `;
+        }).join('');
     } catch (error) {
         // silent
     }
@@ -1200,17 +1208,22 @@ function renderAgentOutput(data) {
 
     const stepsSlot = container.querySelector('[data-slot="steps"]');
     if (data.steps && data.steps.length) {
-        stepsSlot.innerHTML = data.steps.map((step, index) => `
-            <div class="search-result" style="margin-bottom:10px;">
-                <div class="search-result-head">
-                    <span class="source-badge">${index + 1}. ${step.tool}</span>
+        stepsSlot.innerHTML = data.steps.map((step, index) => {
+            const source = step.source || 'local';
+            const badgeColor = source === 'local' ? '#e0e7ff' : (source.startsWith('mcp:') ? '#fef3c7' : '#fee2e2');
+            return `
+                <div class="search-result" style="margin-bottom:10px;">
+                    <div class="search-result-head">
+                        <span class="source-badge">${index + 1}. ${escapeHtml(step.tool)}</span>
+                        <span style="background:${badgeColor};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:8px;">${escapeHtml(source.toUpperCase())}</span>
+                    </div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Args:</div>
+                    <div class="search-result-text" data-slot="step-args-${index}" style="font-family:monospace;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;"></div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Result:</div>
+                    <div class="search-result-text" data-slot="step-result-${index}" style="font-family:monospace;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;"></div>
                 </div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Args:</div>
-                <div class="search-result-text" data-slot="step-args-${index}" style="font-family:monospace;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;"></div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Result:</div>
-                <div class="search-result-text" data-slot="step-result-${index}" style="font-family:monospace;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;"></div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
         data.steps.forEach((step, index) => {
             stepsSlot.querySelector(`[data-slot="step-args-${index}"]`).textContent = JSON.stringify(step.args, null, 2);
             stepsSlot.querySelector(`[data-slot="step-result-${index}"]`).textContent = JSON.stringify(step.result, null, 2);
