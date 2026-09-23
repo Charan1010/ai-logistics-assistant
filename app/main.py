@@ -45,6 +45,12 @@ from app.models import (
     PlanResponse,
     PlanStepResult,
     AgentTaskResponse,
+    MCPServerInfo,
+    MCPToolInfo,
+    MCPServersResponse,
+    MCPToolsResponse,
+    MCPExecuteRequest,
+    MCPExecuteResponse,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -56,6 +62,11 @@ from app.vector_store import get_vector_store
 from app.agent import run_agent, TOOLS_REGISTRY
 from app.planner import make_plan, execute_plan
 from app.task_store import task_store
+from app.mcp_client import (
+    call_mcp_tool,
+    get_server_registry,
+    list_mcp_tools,
+)
 
 app = FastAPI(
     title=settings.app_name,
@@ -1107,6 +1118,43 @@ async def agent_status(task_id: str, x_tenant_id: str | None = Header(default=No
             raise HTTPException(status_code=403, detail="Cross-tenant task access denied")
 
     return _task_to_response(task)
+
+
+# MCP Endpoints (Feature 9)
+
+@app.get("/api/mcp/servers", response_model=MCPServersResponse)
+async def list_mcp_servers():
+    """List configured MCP servers and whether they are enabled."""
+    entries = get_server_registry()
+    return MCPServersResponse(
+        servers=[MCPServerInfo(**e) for e in entries],
+        total=len(entries),
+    )
+
+
+@app.get("/api/mcp/tools", response_model=MCPToolsResponse)
+async def list_all_mcp_tools():
+    """Discover and return every tool exposed by enabled MCP servers."""
+    try:
+        tools = await list_mcp_tools()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"MCP discovery failed: {e}")
+
+    return MCPToolsResponse(
+        tools=[MCPToolInfo(**t) for t in tools],
+        total=len(tools),
+    )
+
+
+@app.post("/api/mcp/execute", response_model=MCPExecuteResponse)
+async def execute_mcp_tool(request: MCPExecuteRequest):
+    """Directly invoke an MCP tool. Bypasses the LLM — useful for debugging."""
+    try:
+        result = await call_mcp_tool(request.tool_name, request.arguments)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"MCP execution failed: {e}")
+
+    return MCPExecuteResponse(tool_name=request.tool_name, result=result)
 
 
 if __name__ == "__main__":

@@ -224,6 +224,7 @@ class AgentRequest(BaseModel):
 class AgentStep(BaseModel):
     """One tool execution step performed by the agent."""
     tool: str = Field(..., description="Name of the tool that was called")
+    source: str = Field("local", description="Where the tool came from: 'local', 'mcp:<server>', or 'unknown'")
     args: dict = Field(default_factory=dict, description="Arguments the model chose for the tool")
     result: dict = Field(default_factory=dict, description="Structured result returned by the tool")
 
@@ -270,3 +271,41 @@ class PlanResponse(BaseModel):
     status: Literal["planning", "executing", "done", "error"]
     plan: List[str]
     session_id: Optional[str] = None
+
+
+# MCP Models (Feature 9)
+
+class MCPServerInfo(BaseModel):
+    """Configured MCP server entry."""
+    name: str
+    enabled: bool
+    transport: str
+    description: str
+
+
+class MCPToolInfo(BaseModel):
+    """A tool discovered from an MCP server."""
+    name: str
+    description: str
+    server: str
+    inputSchema: dict = Field(default_factory=dict)
+
+
+class MCPServersResponse(BaseModel):
+    servers: List[MCPServerInfo]
+    total: int
+
+
+class MCPToolsResponse(BaseModel):
+    tools: List[MCPToolInfo]
+    total: int
+
+
+class MCPExecuteRequest(BaseModel):
+    tool_name: str = Field(..., min_length=1)
+    arguments: dict = Field(default_factory=dict)
+
+
+class MCPExecuteResponse(BaseModel):
+    tool_name: str
+    result: dict

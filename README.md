@@ -29,6 +29,7 @@ Executive-level AI assistant that understands logistics operations, provides rea
 ### Phase 4: Intelligence (in progress)
 - [x] **Feature 7: Basic Agent** - Tool calling with 4 logistics tools and transparent audit trail
 - [x] **Feature 8: Multi-Step Agent** - Plan-and-Execute task decomposition with background execution + polling
+- [x] **Feature 9: MCP Integration** - Model Context Protocol server exposing rate card / customs / fuel surcharge tools
 - [ ] **Feature 9: MCP Integration** - Model Context Protocol for external tools
 
 ### Phase 5: Production (Planned)
@@ -191,6 +192,25 @@ curl -X POST http://localhost:8000/api/agent/plan \
 # Poll for progress (returns status, plan, steps_completed, result)
 curl http://localhost:8000/api/agent/status/<task_id>
 ```
+
+### MCP tools (Feature 9)
+
+```bash
+# List connected MCP servers
+curl http://localhost:8000/api/mcp/servers
+
+# List every tool exposed by every connected server
+curl http://localhost:8000/api/mcp/tools
+
+# Directly invoke an MCP tool (bypasses the LLM)
+curl -X POST http://localhost:8000/api/mcp/execute \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name": "check_customs_status", "arguments": {"tracking_number": "TRK-42"}}'
+
+# The agent endpoint automatically merges local + MCP tools
+curl -X POST http://localhost:8000/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Check customs status of TRK-42 and give me the fuel surcharge for the northeast"}'
 
 Agent response shape:
 

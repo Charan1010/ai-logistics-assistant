@@ -12,6 +12,7 @@ import uuid
 from typing import Callable
 
 from app.llm_client import llm_client
+from app.mcp_client import call_mcp_tool, get_mcp_tool_schemas, list_mcp_tools
 from app.session_store import session_store
 
 
@@ -296,10 +297,14 @@ async def run_agent(message: str, session_id: str | None = None) -> dict:
     """
     Run the two-call agent loop.
 
+    Merges local tools from TOOLS_REGISTRY with any tools discovered from
+    connected MCP servers (app/mcp_client.py). The LLM sees them as one list;
+    dispatch decides local vs MCP by tool name.
+
     Returns:
         {
           "result": str,
-          "steps": [{"tool": str, "args": dict, "result": dict}, ...],
+          "steps": [{"tool": str, "source": str, "args": dict, "result": dict}, ...],
           "tools_used": [str, ...],
         }
     """
@@ -310,7 +315,12 @@ async def run_agent(message: str, session_id: str | None = None) -> dict:
         {"role": "user", "content": message},
     ]
 
-    first = await llm_client.chat_with_tools(messages=messages, tools=_tool_schemas())
+    mcp_schemas = await get_mcp_tool_schemas()
+    mcp_tools = await list_mcp_tools()
+    mcp_owners: dict[str, str] = {tool["name"]: tool["server"] for tool in mcp_tools}
+    combined_schemas = _tool_schemas() + mcp_schemas
+
+    first = await llm_client.chat_with_tools(messages=messages, tools=combined_schemas)
 
     steps: list[dict] = []
     tools_used: list[str] = []
@@ -336,18 +346,33 @@ async def run_agent(message: str, session_id: str | None = None) -> dict:
 
     for index, call in enumerate(first.tool_calls):
         tool_entry = TOOLS_REGISTRY.get(call.name)
-        if tool_entry is None:
-            tool_result = {"error": f"Unknown tool '{call.name}'"}
-        else:
+        if tool_entry is not None:
             fn, _ = tool_entry
+            source = "local"
             try:
                 tool_result = fn(**call.arguments)
                 if not isinstance(tool_result, dict):
                     tool_result = {"result": tool_result}
             except Exception as exc:
                 tool_result = {"error": f"Tool execution failed: {exc}"}
+        elif call.name in mcp_owners:
+            source = f"mcp:{mcp_owners[call.name]}"
+            try:
+                tool_result = await call_mcp_tool(call.name, call.arguments)
+                if not isinstance(tool_result, dict):
+                    tool_result = {"result": tool_result}
+            except Exception as exc:
+                tool_result = {"error": f"MCP tool execution failed: {exc}"}
+        else:
+            source = "unknown"
+            tool_result = {"error": f"Unknown tool '{call.name}'"}
 
-        steps.append({"tool": call.name, "args": call.arguments, "result": tool_result})
+        steps.append({
+            "tool": call.name,
+            "source": source,
+            "args": call.arguments,
+            "result": tool_result,
+        })
         tools_used.append(call.name)
 
         messages.append({
