@@ -5,10 +5,11 @@ A stateless AI chatbot with logistics domain expertise.
 import httpx
 import json
 import uuid
+import base64
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -51,6 +52,10 @@ from app.models import (
     MCPToolsResponse,
     MCPExecuteRequest,
     MCPExecuteResponse,
+    VoiceTranscribeResponse,
+    VoiceChatResponse,
+    VisionAnalyzeResponse,
+    MultimodalChatResponse,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -66,6 +71,12 @@ from app.mcp_client import (
     call_mcp_tool,
     get_server_registry,
     list_mcp_tools,
+)
+from app.multimodal import (
+    analyze_image,
+    detect_modality,
+    synthesize_speech,
+    transcribe_audio,
 )
 
 app = FastAPI(
@@ -1155,6 +1166,145 @@ async def execute_mcp_tool(request: MCPExecuteRequest):
         raise HTTPException(status_code=502, detail=f"MCP execution failed: {e}")
 
     return MCPExecuteResponse(tool_name=request.tool_name, result=result)
+
+
+# Multimodal Endpoints (Feature 10)
+
+async def _voice_to_answer(audio: UploadFile, session_id: str | None, x_tenant_id: str | None) -> tuple[str, str]:
+    """Transcribe audio, then run through smart_chat. Returns (transcript, answer)."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    try:
+        transcript = await transcribe_audio(audio_bytes, audio.filename or "audio.webm")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    if not transcript.strip():
+        return transcript, ""
+
+    smart_response = await smart_chat(
+        SmartChatRequest(message=transcript, session_id=session_id),
+        x_tenant_id=x_tenant_id,
+    )
+    return transcript, smart_response.answer
+
+
+@app.post("/api/voice/transcribe", response_model=VoiceTranscribeResponse)
+async def voice_transcribe(audio: UploadFile = File(...)):
+    """Convert an uploaded audio file to text via Groq Whisper."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+    try:
+        text = await transcribe_audio(audio_bytes, audio.filename or "audio.webm")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return VoiceTranscribeResponse(text=text, model=f"faster-whisper/{settings.whisper_model_size}")
+
+
+@app.post("/api/voice/chat", response_model=VoiceChatResponse)
+async def voice_chat(
+    audio: UploadFile = File(...),
+    session_id: str | None = Form(default=None),
+    speak_response: bool = Form(default=True),
+    x_tenant_id: str | None = Header(default=None),
+):
+    """Full voice pipeline: STT → smart_chat → TTS. Returns transcript, answer, and MP3 base64."""
+    transcript, answer = await _voice_to_answer(audio, session_id, x_tenant_id)
+
+    audio_b64: str | None = None
+    if speak_response and answer.strip():
+        try:
+            mp3_bytes = await synthesize_speech(answer)
+            audio_b64 = base64.b64encode(mp3_bytes).decode("ascii")
+        except RuntimeError:
+            audio_b64 = None
+
+    return VoiceChatResponse(
+        transcript=transcript,
+        answer=answer,
+        audio_base64=audio_b64,
+        model=llm_client.model,
+    )
+
+
+@app.post("/api/vision/analyze", response_model=VisionAnalyzeResponse)
+async def vision_analyze(
+    image: UploadFile = File(...),
+    prompt: str = Form(default="Describe this image."),
+    detail: str = Form(default="auto"),
+):
+    """Send an image + prompt to the configured VLM (Ollama llava by default)."""
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty image file")
+
+    try:
+        result = await analyze_image(image_bytes, prompt, detail=detail)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return VisionAnalyzeResponse(**result)
+
+
+@app.post("/api/chat/multimodal", response_model=MultimodalChatResponse)
+async def chat_multimodal(
+    message: str | None = Form(default=None),
+    session_id: str | None = Form(default=None),
+    prompt: str = Form(default="Describe this image."),
+    speak_response: bool = Form(default=False),
+    audio: UploadFile | None = File(default=None),
+    image: UploadFile | None = File(default=None),
+    x_tenant_id: str | None = Header(default=None),
+):
+    """Unified multimodal endpoint. Detects modality and dispatches to the right pipeline."""
+    modality = detect_modality(has_audio=audio is not None, has_image=image is not None)
+
+    if modality == "voice":
+        transcript, answer = await _voice_to_answer(audio, session_id, x_tenant_id)
+        audio_b64 = None
+        if speak_response and answer.strip():
+            try:
+                mp3_bytes = await synthesize_speech(answer)
+                audio_b64 = base64.b64encode(mp3_bytes).decode("ascii")
+            except RuntimeError:
+                audio_b64 = None
+        return MultimodalChatResponse(
+            modality="voice",
+            transcript=transcript,
+            answer=answer,
+            audio_base64=audio_b64,
+            model=llm_client.model,
+        )
+
+    if modality == "vision":
+        image_bytes = await image.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="Empty image file")
+        try:
+            result = await analyze_image(image_bytes, prompt)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        return MultimodalChatResponse(
+            modality="vision",
+            answer=result["answer"],
+            model=result["model"],
+        )
+
+    # text
+    if not message or not message.strip():
+        raise HTTPException(status_code=400, detail="No input provided (message, audio, or image)")
+    smart_response = await smart_chat(
+        SmartChatRequest(message=message, session_id=session_id),
+        x_tenant_id=x_tenant_id,
+    )
+    return MultimodalChatResponse(
+        modality="text",
+        answer=smart_response.answer,
+        model=llm_client.model,
+    )
 
 
 if __name__ == "__main__":

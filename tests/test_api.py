@@ -1407,3 +1407,131 @@ def test_agent_still_dispatches_to_local_tool_when_mcp_available(mock_chat, mock
     assert data["tools_used"] == ["check_shipment_status"]
     assert data["steps"][0]["source"] == "local"
     mock_call.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Feature 10: Multimodal AI (Voice + Vision + Router)
+# ---------------------------------------------------------------------------
+
+@patch("app.main.transcribe_audio", new_callable=AsyncMock)
+def test_voice_transcribe_endpoint(mock_transcribe):
+    mock_transcribe.return_value = "Check shipment TRK-42"
+    response = client.post(
+        "/api/voice/transcribe",
+        files={"audio": ("clip.webm", b"fakeaudio", "audio/webm")},
+    )
+    assert response.status_code == 200
+    assert response.json()["text"] == "Check shipment TRK-42"
+    mock_transcribe.assert_awaited_once()
+
+
+def test_voice_transcribe_rejects_empty_upload():
+    response = client.post(
+        "/api/voice/transcribe",
+        files={"audio": ("clip.webm", b"", "audio/webm")},
+    )
+    assert response.status_code == 400
+
+
+@patch("app.main.transcribe_audio", new_callable=AsyncMock)
+def test_voice_transcribe_returns_503_on_whisper_failure(mock_transcribe):
+    mock_transcribe.side_effect = RuntimeError("Whisper transcription failed: model load error")
+    response = client.post(
+        "/api/voice/transcribe",
+        files={"audio": ("clip.webm", b"fake", "audio/webm")},
+    )
+    assert response.status_code == 503
+    assert "Whisper" in response.json()["detail"]
+
+
+@patch("app.main.synthesize_speech", new_callable=AsyncMock)
+@patch("app.main.transcribe_audio", new_callable=AsyncMock)
+@patch("app.main.llm_client.chat", new_callable=AsyncMock)
+def test_voice_chat_full_pipeline(mock_chat, mock_transcribe, mock_tts):
+    mock_transcribe.return_value = "Where is TRK-42?"
+    mock_chat.return_value = "TRK-42 is in transit."
+    mock_tts.return_value = b"FAKE_MP3_BYTES"
+
+    with patch("app.main.classify_query", new_callable=AsyncMock) as mock_classify:
+        mock_classify.return_value = QueryClassification(
+            needs_retrieval=False, confidence=0.9, query_type="general",
+        )
+        response = client.post(
+            "/api/voice/chat",
+            files={"audio": ("clip.webm", b"fakeaudio", "audio/webm")},
+            data={"speak_response": "true"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["transcript"] == "Where is TRK-42?"
+    assert data["answer"] == "TRK-42 is in transit."
+    assert data["audio_base64"] is not None
+    import base64 as _b64
+    assert _b64.b64decode(data["audio_base64"]) == b"FAKE_MP3_BYTES"
+
+
+@patch("app.main.analyze_image", new_callable=AsyncMock)
+def test_vision_analyze_endpoint(mock_analyze):
+    mock_analyze.return_value = {
+        "answer": "A FedEx shipping label with tracking number TRK-42.",
+        "model": "llava",
+        "detail": "auto",
+    }
+    response = client.post(
+        "/api/vision/analyze",
+        files={"image": ("label.png", b"\x89PNGfakeimage", "image/png")},
+        data={"prompt": "Extract the tracking number"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model"] == "llava"
+    assert "TRK-42" in data["answer"]
+
+
+@patch("app.main.analyze_image", new_callable=AsyncMock)
+def test_vision_analyze_returns_503_when_model_not_pulled(mock_analyze):
+    mock_analyze.side_effect = RuntimeError("VLM model 'llava' not pulled. Run: ollama pull llava")
+    response = client.post(
+        "/api/vision/analyze",
+        files={"image": ("img.png", b"fake", "image/png")},
+        data={"prompt": "?"},
+    )
+    assert response.status_code == 503
+    assert "ollama pull llava" in response.json()["detail"]
+
+
+@patch("app.main.analyze_image", new_callable=AsyncMock)
+def test_multimodal_router_routes_image_to_vision(mock_analyze):
+    mock_analyze.return_value = {"answer": "a label", "model": "llava", "detail": "auto"}
+    response = client.post(
+        "/api/chat/multimodal",
+        files={"image": ("label.png", b"fake", "image/png")},
+        data={"prompt": "What is this?"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["modality"] == "vision"
+    assert data["answer"] == "a label"
+
+
+@patch("app.main.llm_client.chat", new_callable=AsyncMock)
+def test_multimodal_router_routes_text_to_smart_chat(mock_chat):
+    mock_chat.return_value = "Hello!"
+    with patch("app.main.classify_query", new_callable=AsyncMock) as mock_classify:
+        mock_classify.return_value = QueryClassification(
+            needs_retrieval=False, confidence=0.9, query_type="general",
+        )
+        response = client.post(
+            "/api/chat/multimodal",
+            data={"message": "Hi there"},
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["modality"] == "text"
+    assert data["answer"] == "Hello!"
+
+
+def test_multimodal_router_rejects_empty_request():
+    response = client.post("/api/chat/multimodal", data={})
+    assert response.status_code == 400

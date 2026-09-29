@@ -24,3 +24,11 @@ ruff==0.2.1
 
 # Feature 9: MCP (Model Context Protocol)
 mcp==1.30.0
+
+# Feature 10: Multimodal (local faster-whisper STT + gTTS + Ollama VLM via httpx)
+faster-whisper>=1.0.0,<2.0.0
+gTTS>=2.5.0,<3.0.0
+
+# Corporate-proxy TLS: auto-inject Windows/Linux system trust store into requests.
+# No-op on networks without MITM inspection; essential behind Zscaler et al.
+pip-system-certs>=5.0
