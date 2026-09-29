@@ -282,6 +282,7 @@
             <button class="tab-btn" data-tab="search" onclick="switchTab('search')">🔍 Search</button>
             <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">🧠 Memory</button>
             <button class="tab-btn" data-tab="agent" onclick="switchTab('agent')">🛠️ Agent</button>
+            <button class="tab-btn" data-tab="multimodal" onclick="switchTab('multimodal')">🎨 Multimodal</button>
         </div>
     </div>
 
@@ -440,6 +441,37 @@
                 <div class="structured-card">
                     <h3>Available Tools</h3>
                     <div id="agentToolsList"><p style="color:var(--text-muted);font-size:13px;">Loading tools...</p></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MULTIMODAL PANEL (Feature 10) -->
+        <div class="panel" id="panel-multimodal">
+            <div class="structured-body">
+                <div class="structured-card">
+                    <h3>🎤 Voice — speak to the assistant</h3>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                        Records via your microphone → Groq Whisper transcribes → Smart Chat answers → gTTS speaks it back.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button class="primary" id="recordButton" onclick="toggleRecording()">🎤 Start Recording</button>
+                        <span id="recordStatus" style="font-size:13px;color:var(--text-muted);"></span>
+                    </div>
+                    <div id="voiceOutput" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="structured-card">
+                    <h3>📷 Vision — upload an image</h3>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                        Uses Ollama's local <code>llava</code> vision model. Try a shipping label, product photo, or a document scan.
+                    </p>
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        <input type="file" id="visionFile" accept="image/*" onchange="previewVisionImage()">
+                        <img id="visionPreview" style="max-width:100%;max-height:200px;border-radius:6px;display:none;">
+                        <input type="text" id="visionPrompt" placeholder="What should I look for? (e.g. 'Extract the tracking number')" value="Describe this image in detail.">
+                        <button class="primary" onclick="sendVisionQuery()">Analyze image</button>
+                    </div>
+                    <div id="visionOutput" style="margin-top:12px;"></div>
                 </div>
             </div>
         </div>
@@ -1358,6 +1390,118 @@ renderTenantSelector();
 checkServerStatus();
 createSession().then(() => loadSessionsList());
 document.getElementById('messageInput').focus();
+
+/* ---------------- Multimodal (Feature 10) ---------------- */
+let mediaRecorder = null;
+let recordedChunks = [];
+
+async function toggleRecording() {
+    const btn = document.getElementById('recordButton');
+    const status = document.getElementById('recordStatus');
+
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        btn.textContent = '🎤 Start Recording';
+        status.textContent = 'Processing...';
+        return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('Microphone not supported in this browser', true);
+        return;
+    }
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+            stream.getTracks().forEach(t => t.stop());
+            const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+            sendVoiceRecording(blob);
+        };
+        mediaRecorder.start();
+        btn.textContent = '⏹️ Stop Recording';
+        status.textContent = '🔴 Recording...';
+    } catch (err) {
+        showToast('Microphone access denied: ' + err.message, true);
+    }
+}
+
+async function sendVoiceRecording(audioBlob) {
+    const container = document.getElementById('voiceOutput');
+    const status = document.getElementById('recordStatus');
+    container.innerHTML = '<p class="empty-hint">Transcribing + answering...</p>';
+
+    const form = new FormData();
+    form.append('audio', audioBlob, 'recording.webm');
+    form.append('speak_response', 'true');
+
+    try {
+        const response = await fetch(`${API_URL}/api/voice/chat`, {
+            method: 'POST', headers: tenantHeaders(), body: form,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Voice chat failed');
+
+        status.textContent = '';
+        let audioHtml = '';
+        if (data.audio_base64) {
+            audioHtml = `<audio controls autoplay src="data:audio/mp3;base64,${data.audio_base64}" style="margin-top:8px;width:100%;"></audio>`;
+        }
+        container.innerHTML = `
+            <div class="search-result"><strong>You said:</strong><br>${escapeHtml(data.transcript || '')}</div>
+            <div class="search-result" style="margin-top:8px;"><strong>Answer:</strong><br>${escapeHtml(data.answer || '')}${audioHtml}</div>
+        `;
+    } catch (err) {
+        container.innerHTML = '<p class="empty-hint">Voice request failed.</p>';
+        status.textContent = '';
+        showToast(err.message, true);
+    }
+}
+
+function previewVisionImage() {
+    const file = document.getElementById('visionFile').files[0];
+    const preview = document.getElementById('visionPreview');
+    if (!file) { preview.style.display = 'none'; return; }
+    preview.src = URL.createObjectURL(file);
+    preview.style.display = 'block';
+}
+
+async function sendVisionQuery() {
+    const fileInput = document.getElementById('visionFile');
+    const promptInput = document.getElementById('visionPrompt');
+    const container = document.getElementById('visionOutput');
+
+    const file = fileInput.files[0];
+    if (!file) { showToast('Choose an image first', true); return; }
+
+    container.innerHTML = '<p class="empty-hint">Analyzing with Ollama VLM (this may take 10–30 s on first call)...</p>';
+
+    const form = new FormData();
+    form.append('image', file);
+    form.append('prompt', promptInput.value || 'Describe this image.');
+    form.append('detail', 'auto');
+
+    try {
+        const response = await fetch(`${API_URL}/api/vision/analyze`, {
+            method: 'POST', headers: tenantHeaders(), body: form,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Vision request failed');
+
+        container.innerHTML = `
+            <div class="search-result">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Model: <code>${escapeHtml(data.model)}</code></div>
+                <div style="white-space:pre-wrap;">${escapeHtml(data.answer)}</div>
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = '<p class="empty-hint">Vision request failed.</p>';
+        showToast(err.message, true);
+    }
+}
 </script>
 </body>
 </html>

@@ -309,3 +309,31 @@ class MCPExecuteRequest(BaseModel):
 class MCPExecuteResponse(BaseModel):
     tool_name: str
     result: dict
+
+
+# Multimodal Models (Feature 10)
+
+class VoiceTranscribeResponse(BaseModel):
+    text: str = Field(..., description="Transcribed text from audio")
+    model: str = Field(..., description="STT model used")
+
+
+class VoiceChatResponse(BaseModel):
+    transcript: str = Field(..., description="Transcribed user question")
+    answer: str = Field(..., description="Assistant's text answer")
+    audio_base64: Optional[str] = Field(None, description="Base64-encoded MP3 of spoken answer")
+    model: str = Field(..., description="LLM model used for the answer")
+
+
+class VisionAnalyzeResponse(BaseModel):
+    answer: str = Field(..., description="VLM's textual analysis of the image")
+    model: str = Field(..., description="VLM model used")
+    detail: str = Field("auto", description="Detail level requested")
+
+
+class MultimodalChatResponse(BaseModel):
+    modality: Literal["text", "voice", "vision"]
+    answer: str
+    transcript: Optional[str] = None
+    audio_base64: Optional[str] = None
+    model: str

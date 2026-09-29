@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-8b-instant"
 
+    # Feature 10: Multimodal AI
+    vlm_model: str = "llava"                # Ollama VLM: llava | phi3:vision | llava-phi3
+    whisper_model_size: str = "base"        # faster-whisper: tiny | base | small | medium | large-v3
+    whisper_language: str = ""              # ISO code (e.g. 'en'); empty = auto-detect
+    tts_language: str = "en"                # gTTS language code
+
     # Application
     app_name: str = "AI Logistics Assistant"
     log_level: str = "INFO"

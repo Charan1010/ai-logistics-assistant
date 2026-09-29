@@ -30,6 +30,7 @@ Executive-level AI assistant that understands logistics operations, provides rea
 - [x] **Feature 7: Basic Agent** - Tool calling with 4 logistics tools and transparent audit trail
 - [x] **Feature 8: Multi-Step Agent** - Plan-and-Execute task decomposition with background execution + polling
 - [x] **Feature 9: MCP Integration** - Model Context Protocol server exposing rate card / customs / fuel surcharge tools
+- [x] **Feature 10: Multimodal AI** - Voice (local faster-whisper + gTTS) + Vision (Ollama llava) + unified modality router
 - [ ] **Feature 9: MCP Integration** - Model Context Protocol for external tools
 
 ### Phase 5: Production (Planned)
@@ -211,6 +212,51 @@ curl -X POST http://localhost:8000/api/mcp/execute \
 curl -X POST http://localhost:8000/api/agent/run \
   -H "Content-Type: application/json" \
   -d '{"message": "Check customs status of TRK-42 and give me the fuel surcharge for the northeast"}'
+```
+
+### Multimodal (Feature 10)
+
+Prereqs:
+```bash
+ollama pull llava                        # ~4.5 GB, VLM for image analysis
+pip install faster-whisper gTTS            # already in requirements.txt
+# Pre-cache the Whisper model (one-time, requires Hugging Face Hub access —
+# corporate proxies may block this; run on personal network if needed):
+python -c "from faster_whisper import WhisperModel; WhisperModel('base')"
+```
+
+### Behind a corporate TLS-inspection proxy (Zscaler, Netskope, etc.)
+
+If Hugging Face Hub is blocked, use **ModelScope** (a Chinese HF-compatible mirror that Zscaler typically allows):
+
+```bash
+pip install modelscope
+python -c "from modelscope import snapshot_download; \
+    print(snapshot_download('pengzhendong/faster-whisper-base'))"
+# Copy the printed path, then in .env:
+# WHISPER_MODEL_SIZE=<that path>
+```
+
+Vision (`ollama pull llava`) may still be blocked because corporate proxies often kill large binary blob downloads. Run `ollama pull llava` once on personal WiFi — after that it caches locally and works forever offline.
+
+```bash
+# Vision — analyze an image with Ollama llava
+curl -X POST http://localhost:8000/api/vision/analyze \
+  -F "image=@shipping-label.jpg" \
+  -F "prompt=Extract the tracking number from this label"
+
+# Voice — transcribe audio to text (local faster-whisper, no network)
+curl -X POST http://localhost:8000/api/voice/transcribe \
+  -F "audio=@question.webm"
+
+# Voice chat — full pipeline (STT -> Smart Chat -> TTS)
+curl -X POST http://localhost:8000/api/voice/chat \
+  -F "audio=@question.webm" \
+  -F "speak_response=true"
+
+# Unified modality router — detects text/audio/image automatically
+curl -X POST http://localhost:8000/api/chat/multimodal \
+  -F "message=What is the customs process for international shipments?"
 
 Agent response shape:
 
