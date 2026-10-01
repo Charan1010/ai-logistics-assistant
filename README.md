@@ -31,10 +31,10 @@ Executive-level AI assistant that understands logistics operations, provides rea
 - [x] **Feature 8: Multi-Step Agent** - Plan-and-Execute task decomposition with background execution + polling
 - [x] **Feature 9: MCP Integration** - Model Context Protocol server exposing rate card / customs / fuel surcharge tools
 - [x] **Feature 10: Multimodal AI** - Voice (local faster-whisper + gTTS) + Vision (Ollama llava) + unified modality router
-- [ ] **Feature 9: MCP Integration** - Model Context Protocol for external tools
+- [x] **Feature 9: MCP Integration** - Model Context Protocol for external tools
 
 ### Phase 5: Production (Planned)
-- [ ] **Feature 10: Multimodal AI** - Image/document understanding
+- [x] **Feature 10: Multimodal AI** - Image/document understanding
 - [ ] **Feature 11: Production Design** - Error handling, monitoring, rate limiting
 - [ ] **Feature 12: Containerization** - Docker deployment ready
 
