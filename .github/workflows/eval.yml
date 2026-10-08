@@ -1,0 +1,58 @@
+# AI Eval Quality Gate (Feature 12: Ship It)
+#
+# Two checks on every push / PR to main:
+#   1. Smoke tests  — app imports + /api/health responds (fast, no LLM).
+#   2. Eval gate    — golden logistics set must score >= 70% (real LLM calls).
+#
+# The eval step is gated on GROQ_API_KEY so Ollama-only setups still get green
+# CI from smoke tests. Add a free Groq key (console.groq.com) as a repo secret
+# named GROQ_API_KEY to unlock the eval gate.
+
+name: AI Eval Quality Gate
+
+on:
+  push:
+    branches: [ main, 'feature/**' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Structural checks: imports resolve and /api/health returns 200.
+      # No LLM calls — runs regardless of whether a provider key is present.
+      - name: Smoke test (import + health)
+        run: |
+          python -c "
+          from fastapi.testclient import TestClient
+          from app.main import app
+          c = TestClient(app)
+          r = c.get('/api/health')
+          assert r.status_code == 200, r.status_code
+          assert r.json().get('status') == 'healthy', r.json()
+          print('smoke OK:', r.json())
+          "
+
+      # AI quality gate: fails the build if pass rate < 70%.
+      # Skipped automatically when no Groq key is configured.
+      - name: Eval quality gate (pass rate >= 70%)
+        if: env.GROQ_API_KEY != ''
+        run: python tests/run_eval_ci.py
+        env:
+          LLM_PROVIDER: groq
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama-3.1-8b-instant
+          EMBEDDINGS_OFFLINE_MODE: "false"

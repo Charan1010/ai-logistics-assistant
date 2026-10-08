@@ -1,0 +1,37 @@
+# Ship It — runs the AI Logistics Assistant as a container.
+#
+#   docker compose up --build     # build + run
+#   docker compose up             # reuse cached image
+#   docker compose down           # stop (data preserved in the named volume)
+#   docker compose down -v        # also delete persisted vector DB
+#
+# Ollama note: the model server runs on the HOST, not in this container.
+# host.docker.internal lets the container reach the host's Ollama on :11434.
+
+services:
+  api:
+    build: .
+    image: ai-logistics-assistant:latest
+    container_name: ai-logistics-assistant
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Reach the host's Ollama from inside the container (override localhost).
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Named volume persists Chroma embeddings across restarts and rebuilds.
+      - chroma_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  chroma_data:

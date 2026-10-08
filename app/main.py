@@ -398,6 +398,12 @@ async def root():
     }
 
 
+@app.get("/api/health")
+async def health():
+    """Lightweight liveness probe for container orchestration (no external deps)."""
+    return {"status": "healthy"}
+
+
 @app.get("/api/status")
 async def status():
     """API status endpoint."""
