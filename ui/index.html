@@ -283,6 +283,7 @@
             <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">🧠 Memory</button>
             <button class="tab-btn" data-tab="agent" onclick="switchTab('agent')">🛠️ Agent</button>
             <button class="tab-btn" data-tab="multimodal" onclick="switchTab('multimodal')">🎨 Multimodal</button>
+            <button class="tab-btn" data-tab="admin" onclick="switchTab('admin')">📊 Admin</button>
         </div>
     </div>
 
@@ -475,6 +476,36 @@
                 </div>
             </div>
         </div>
+
+        <!-- ADMIN PANEL (Feature 11) -->
+        <div class="panel" id="panel-admin">
+            <div class="structured-body">
+                <div class="structured-card">
+                    <h3>📊 Metrics Dashboard</h3>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                        Auto-refreshes every 5 seconds. Measures all /api/* traffic.
+                    </p>
+                    <div class="audit-grid" id="metricsGrid">
+                        <div class="audit-item"><div class="label">Total Requests</div><div class="value" id="mTotal">-</div></div>
+                        <div class="audit-item"><div class="label">Avg Latency</div><div class="value" id="mLatency">-</div></div>
+                        <div class="audit-item"><div class="label">Error Rate</div><div class="value" id="mErrorRate">-</div></div>
+                        <div class="audit-item"><div class="label">Last Eval Pass Rate</div><div class="value" id="mEvalPass">-</div></div>
+                    </div>
+                </div>
+
+                <div class="structured-card">
+                    <h3>🧪 Eval Harness</h3>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                        Runs 10 golden logistics cases through classify → route → LLM. Scores each.
+                        Expect ~30–60s on local Ollama.
+                    </p>
+                    <button class="primary" id="evalRunBtn" onclick="runEval()">▶ Run Eval</button>
+                    <div id="evalOutput" style="margin-top:12px;">
+                        <p class="empty-hint">Click Run Eval to score the golden set.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -569,6 +600,8 @@ function switchTab(tab) {
     if (tab === 'smart') refreshSmartDocumentFilterOptions();
     if (tab === 'memory') refreshRetrievalMemory();
     if (tab === 'agent') { refreshAgentTools(); setAgentMode(agentMode || 'single'); }
+    if (tab === 'admin') startAdminAutoRefresh();
+    else stopAdminAutoRefresh();
 }
 
 /* ---------------- Status ---------------- */
@@ -1501,6 +1534,95 @@ async function sendVisionQuery() {
         container.innerHTML = '<p class="empty-hint">Vision request failed.</p>';
         showToast(err.message, true);
     }
+}
+
+/* ---------------- Admin (Feature 11) ---------------- */
+let _adminInterval = null;
+
+function startAdminAutoRefresh() {
+    if (_adminInterval) return;
+    loadMetrics();
+    _adminInterval = setInterval(loadMetrics, 5000);
+}
+
+function stopAdminAutoRefresh() {
+    if (_adminInterval) {
+        clearInterval(_adminInterval);
+        _adminInterval = null;
+    }
+}
+
+async function loadMetrics() {
+    try {
+        const r = await fetch(`${API_URL}/api/metrics`, { headers: tenantHeaders() });
+        const d = await r.json();
+        document.getElementById('mTotal').textContent = d.total_requests;
+        document.getElementById('mLatency').textContent = `${d.avg_latency_ms.toFixed(1)} ms`;
+        document.getElementById('mErrorRate').textContent = `${(d.error_rate * 100).toFixed(2)}%`;
+        document.getElementById('mEvalPass').textContent = d.last_eval_pass_rate !== null && d.last_eval_pass_rate !== undefined
+            ? `${(d.last_eval_pass_rate * 100).toFixed(0)}%`
+            : 'not run';
+    } catch (err) { /* silent */ }
+}
+
+async function runEval() {
+    const btn = document.getElementById('evalRunBtn');
+    const container = document.getElementById('evalOutput');
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    container.innerHTML = '<p class="empty-hint">Running cases through classify → route → LLM (this takes ~30–60s)...</p>';
+
+    try {
+        const r = await fetch(`${API_URL}/api/eval/run`, {
+            method: 'POST', headers: jsonHeaders(), body: '{}',
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Eval failed');
+        renderEvalReport(d);
+    } catch (err) {
+        container.innerHTML = '<p class="empty-hint">Eval failed.</p>';
+        showToast(err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '▶ Run Eval';
+    }
+}
+
+function renderEvalReport(report) {
+    const container = document.getElementById('evalOutput');
+    const pct = Math.round(report.pass_rate * 100);
+    const barColor = pct >= 80 ? '#22c55e' : pct >= 60 ? '#f59e0b' : '#ef4444';
+    const casesHtml = report.cases.map(c => {
+        const badgeBg = c.passed ? '#dcfce7' : '#fee2e2';
+        const badgeTxt = c.passed ? 'PASS' : 'FAIL';
+        const failed = (c.checks_failed || []).map(f => `<div style="font-size:11px;color:#b91c1c;">• ${escapeHtml(f)}</div>`).join('');
+        return `
+            <div class="search-result" style="margin-bottom:8px;">
+                <div class="search-result-head">
+                    <span class="source-badge">${escapeHtml(c.case_id)}</span>
+                    <span style="background:${badgeBg};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:8px;">${badgeTxt}</span>
+                </div>
+                <div style="font-size:13px;margin-top:4px;">${escapeHtml(c.question)}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                    query_type: <code>${escapeHtml(c.actual_query_type)}</code> · source: <code>${escapeHtml(c.actual_source)}</code>
+                </div>
+                ${failed}
+            </div>
+        `;
+    }).join('');
+
+    container.innerHTML = `
+        <div style="margin-bottom:12px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <div style="font-size:24px;font-weight:700;">${pct}%</div>
+                <div style="flex:1;background:#f1f5f9;border-radius:4px;height:8px;overflow:hidden;">
+                    <div style="width:${pct}%;height:100%;background:${barColor};"></div>
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);">${report.passed}/${report.total} passed</div>
+            </div>
+        </div>
+        ${casesHtml}
+    `;
 }
 </script>
 </body>

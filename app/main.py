@@ -9,7 +9,7 @@ import base64
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -56,6 +56,8 @@ from app.models import (
     VoiceChatResponse,
     VisionAnalyzeResponse,
     MultimodalChatResponse,
+    MetricsResponse,
+    EvalRunRequest,
 )
 from app.llm_client import llm_client
 from app.config import settings
@@ -78,12 +80,32 @@ from app.multimodal import (
     synthesize_speech,
     transcribe_audio,
 )
+from app import metrics as app_metrics
+from app.logging_config import setup_logging
+from app.middleware import RequestIDMiddleware, TimingMiddleware
+from app.eval_harness import load_default_cases, run_eval
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+setup_logging(level=settings.log_level)
 
 app = FastAPI(
     title=settings.app_name,
     description="Intelligent AI assistant for logistics and supply chain operations",
-    version="0.1.0"
+    version="0.11.0"
 )
+
+# Rate limiting (Feature 11 Part B)
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Observability middleware (Feature 11 Part A). Starlette runs middleware LIFO:
+# RequestID is added LAST so it executes FIRST — request_id is set before timing.
+app.add_middleware(TimingMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # CORS middleware for web UI
 app.add_middleware(
@@ -391,7 +413,8 @@ async def status():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, x_tenant_id: str | None = Header(default=None)):
+@limiter.limit("60/minute")
+async def chat(request: Request, body: ChatRequest, x_tenant_id: str | None = Header(default=None)):
     """
     Chat endpoint with optional session support.
 
@@ -399,28 +422,28 @@ async def chat(request: ChatRequest, x_tenant_id: str | None = Header(default=No
     Otherwise, each request is independent (stateless).
     """
     try:
-        tenant_id = _tenant_from_header(x_tenant_id) if request.session_id else None
+        tenant_id = _tenant_from_header(x_tenant_id) if body.session_id else None
         # Build messages with system prompt
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         # If session ID provided, load conversation history
-        if request.session_id:
-            session = _assert_session_access(request.session_id, tenant_id)
+        if body.session_id:
+            session = _assert_session_access(body.session_id, tenant_id)
 
             # Add previous messages from session
             for msg in session.messages:
                 messages.append({"role": msg.role, "content": msg.content})
 
         # Add current user message
-        messages.append({"role": "user", "content": request.message})
+        messages.append({"role": "user", "content": body.message})
 
         # Get LLM response
         response_text = await llm_client.chat(messages)
 
         # Store messages in session if session_id provided
-        if request.session_id:
-            session_store.add_message(request.session_id, "user", request.message)
-            session_store.add_message(request.session_id, "assistant", response_text)
+        if body.session_id:
+            session_store.add_message(body.session_id, "user", body.message)
+            session_store.add_message(body.session_id, "assistant", response_text)
 
         return ChatResponse(
             response=response_text,
@@ -1030,20 +1053,21 @@ async def list_agent_tools():
 
 
 @app.post("/api/agent/run", response_model=AgentResponse)
-async def agent_run(request: AgentRequest, x_tenant_id: str | None = Header(default=None)):
+@limiter.limit("30/minute")
+async def agent_run(request: Request, body: AgentRequest, x_tenant_id: str | None = Header(default=None)):
     """
     Run one agent turn: LLM chooses tools, we execute them, LLM synthesises answer.
     """
     try:
-        tenant_id = _tenant_from_header(x_tenant_id) if request.session_id else None
-        if request.session_id:
-            _assert_session_access(request.session_id, tenant_id)
+        tenant_id = _tenant_from_header(x_tenant_id) if body.session_id else None
+        if body.session_id:
+            _assert_session_access(body.session_id, tenant_id)
 
-        agent_output = await run_agent(request.message, session_id=request.session_id)
+        agent_output = await run_agent(body.message, session_id=body.session_id)
 
-        if request.session_id:
-            session_store.add_message(request.session_id, "user", request.message)
-            session_store.add_message(request.session_id, "assistant", agent_output["result"])
+        if body.session_id:
+            session_store.add_message(body.session_id, "user", body.message)
+            session_store.add_message(body.session_id, "assistant", agent_output["result"])
 
         return AgentResponse(
             result=agent_output["result"],
@@ -1305,6 +1329,49 @@ async def chat_multimodal(
         answer=smart_response.answer,
         model=llm_client.model,
     )
+
+
+# Observability + Eval Endpoints (Feature 11)
+
+@app.get("/api/metrics", response_model=MetricsResponse)
+async def get_metrics_endpoint():
+    """Live snapshot of request counts, latency, error rate, and last eval pass rate."""
+    return MetricsResponse(**app_metrics.get_metrics())
+
+
+@app.post("/api/eval/run")
+async def eval_run(request: EvalRunRequest | None = None):
+    """Run the golden eval set and return a per-case report. Stores it for /api/eval/last."""
+    cases = load_default_cases()
+    if not cases:
+        raise HTTPException(status_code=500, detail="No eval cases found. Expected tests/eval_cases_logistics.json")
+
+    vector_store = get_vector_store()
+
+    def _search_wrapper(query: str, top_k: int, tenant_id: str | None):
+        try:
+            return vector_store.search(query, top_k=top_k, tenant_id=tenant_id) or []
+        except Exception:
+            return []
+
+    report = await run_eval(
+        test_cases=cases,
+        classify_fn=classify_query,
+        search_fn=_search_wrapper,
+        llm_chat_fn=llm_client.chat,
+        tenant_id=None,
+    )
+    app_metrics.set_eval_result(report.model_dump())
+    return report
+
+
+@app.get("/api/eval/last")
+async def eval_last():
+    """Return the most recent eval report, or 404 if none has been run."""
+    report = app_metrics.get_last_eval()
+    if report is None:
+        raise HTTPException(status_code=404, detail="No eval run yet. POST /api/eval/run first.")
+    return report
 
 
 if __name__ == "__main__":

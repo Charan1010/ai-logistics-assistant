@@ -32,3 +32,6 @@ gTTS>=2.5.0,<3.0.0
 # Corporate-proxy TLS: auto-inject Windows/Linux system trust store into requests.
 # No-op on networks without MITM inspection; essential behind Zscaler et al.
 pip-system-certs>=5.0
+
+# Feature 11: Observability + rate limiting
+slowapi>=0.1.9,<1.0.0

@@ -9,6 +9,7 @@ from app.config import settings
 from app.models import QueryClassification, SearchResult
 from app.retrieval_memory import retrieval_memory_store
 from app.session_store import session_store
+from app import metrics as app_metrics
 
 client = TestClient(app)
 
@@ -22,9 +23,11 @@ def clear_sessions():
     settings.enable_long_term_context = False
     session_store.clear_all()
     retrieval_memory_store.clear_all()
+    app_metrics.reset_for_tests()
     yield
     session_store.clear_all()
     retrieval_memory_store.clear_all()
+    app_metrics.reset_for_tests()
     settings.enable_multi_tenant = original_multi_tenant
     settings.enable_long_term_context = original_long_term_context
 
@@ -1535,3 +1538,82 @@ def test_multimodal_router_routes_text_to_smart_chat(mock_chat):
 def test_multimodal_router_rejects_empty_request():
     response = client.post("/api/chat/multimodal", data={})
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Feature 11: Observability + Rate Limiting + Eval Harness
+# ---------------------------------------------------------------------------
+
+def test_metrics_endpoint_returns_snapshot():
+    response = client.get("/api/metrics")
+    assert response.status_code == 200
+    data = response.json()
+    assert "total_requests" in data
+    assert "avg_latency_ms" in data
+    assert "error_rate" in data
+
+
+def test_request_id_middleware_echoes_header():
+    """Middleware must assign and echo back an X-Request-ID."""
+    response = client.get("/api/mcp/servers")
+    assert "x-request-id" in {k.lower(): v for k, v in response.headers.items()}
+
+
+def test_request_id_middleware_honours_inbound_id():
+    custom_id = "test-correlation-abc-123"
+    response = client.get("/api/mcp/servers", headers={"X-Request-ID": custom_id})
+    assert response.headers.get("x-request-id") == custom_id
+
+
+@patch("app.main.llm_client.chat", new_callable=AsyncMock)
+def test_timing_middleware_increments_metrics(mock_chat):
+    """Each /api/* request should bump total_requests and avg_latency_ms."""
+    mock_chat.return_value = "Hi"
+    app_metrics.reset_for_tests()
+
+    client.get("/api/mcp/servers")
+    client.get("/api/mcp/servers")
+
+    snap = client.get("/api/metrics").json()
+    assert snap["total_requests"] >= 2  # 2 explicit; metrics call itself increments after response
+    assert snap["avg_latency_ms"] >= 0
+
+
+@patch("app.main.llm_client.chat", new_callable=AsyncMock)
+@patch("app.main.classify_query", new_callable=AsyncMock)
+def test_eval_run_endpoint_scores_cases(mock_classify, mock_chat):
+    """Eval endpoint should run golden cases and return a scored report."""
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False, confidence=0.9, query_type="general",
+    )
+    mock_chat.return_value = "A bill of lading is a key shipping document used in freight."
+
+    response = client.post("/api/eval/run", json={})
+    assert response.status_code == 200
+    data = response.json()
+    assert "total" in data and data["total"] > 0
+    assert "pass_rate" in data
+    assert "cases" in data and len(data["cases"]) == data["total"]
+
+
+def test_eval_last_returns_404_before_first_run():
+    """Before any eval has run, /api/eval/last should 404."""
+    app_metrics.reset_for_tests()
+    response = client.get("/api/eval/last")
+    assert response.status_code == 404
+
+
+@patch("app.main.llm_client.chat", new_callable=AsyncMock)
+@patch("app.main.classify_query", new_callable=AsyncMock)
+def test_eval_last_returns_most_recent_report(mock_classify, mock_chat):
+    mock_classify.return_value = QueryClassification(
+        needs_retrieval=False, confidence=0.9, query_type="general",
+    )
+    mock_chat.return_value = "A bill of lading is a shipping document."
+
+    client.post("/api/eval/run", json={})
+
+    last = client.get("/api/eval/last")
+    assert last.status_code == 200
+    data = last.json()
+    assert "pass_rate" in data

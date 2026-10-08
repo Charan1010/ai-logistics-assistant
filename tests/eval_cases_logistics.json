@@ -1,0 +1,72 @@
+[
+  {
+    "id": "gen-001",
+    "question": "What is a bill of lading and why is it important in freight shipping?",
+    "expected_query_type": "general",
+    "expected_source": "llm",
+    "expected_answer_contains": ["bill", "lading"]
+  },
+  {
+    "id": "gen-002",
+    "question": "How do import customs duties work for international shipments?",
+    "expected_query_type": "general",
+    "expected_source": "llm",
+    "expected_answer_contains": ["customs"]
+  },
+  {
+    "id": "gen-003",
+    "question": "What is the difference between FOB and CIF Incoterms?",
+    "expected_query_type": "general",
+    "expected_source": "llm",
+    "expected_answer_contains": ["FOB", "CIF"]
+  },
+  {
+    "id": "gen-004",
+    "question": "What does dimensional weight mean and how is it calculated?",
+    "expected_query_type": "general",
+    "expected_source": "llm",
+    "expected_answer_contains": ["dimensional"]
+  },
+  {
+    "id": "dom-001",
+    "question": "What is our return policy for damaged freight?",
+    "expected_query_type": "domain",
+    "expected_source": null,
+    "expected_answer_contains": []
+  },
+  {
+    "id": "dom-002",
+    "question": "What are the operating hours of the Chicago warehouse?",
+    "expected_query_type": "domain",
+    "expected_source": null,
+    "expected_answer_contains": []
+  },
+  {
+    "id": "dom-003",
+    "question": "How do I file a claim for lost cargo on an international shipment?",
+    "expected_query_type": "domain",
+    "expected_source": null,
+    "expected_answer_contains": []
+  },
+  {
+    "id": "dom-004",
+    "question": "What is the maximum pallet weight our Memphis facility accepts?",
+    "expected_query_type": "domain",
+    "expected_source": null,
+    "expected_answer_contains": []
+  },
+  {
+    "id": "gen-005",
+    "question": "What is the difference between LTL and FTL freight?",
+    "expected_query_type": "general",
+    "expected_source": "llm",
+    "expected_answer_contains": ["LTL"]
+  },
+  {
+    "id": "gen-006",
+    "question": "Explain what cold chain logistics means.",
+    "expected_query_type": "general",
+    "expected_source": "llm",
+    "expected_answer_contains": ["temperature"]
+  }
+]

@@ -337,3 +337,19 @@ class MultimodalChatResponse(BaseModel):
     transcript: Optional[str] = None
     audio_base64: Optional[str] = None
     model: str
+
+
+# Observability Models (Feature 11)
+
+class MetricsResponse(BaseModel):
+    """Snapshot of in-memory metrics."""
+    total_requests: int
+    total_errors: int
+    avg_latency_ms: float
+    error_rate: float
+    last_eval_pass_rate: Optional[float] = None
+
+
+class EvalRunRequest(BaseModel):
+    """Optional in-body override for which cases to run."""
+    cases_path: Optional[str] = Field(None, description="Override path to cases JSON")
