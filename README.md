@@ -32,11 +32,9 @@ Executive-level AI assistant that understands logistics operations, provides rea
 - [x] **Feature 9: MCP Integration** - Model Context Protocol server exposing rate card / customs / fuel surcharge tools
 - [x] **Feature 10: Multimodal AI** - Voice (local faster-whisper + gTTS) + Vision (Ollama llava) + unified modality router
 - [x] **Feature 11: Production Design** - JSON logs + request IDs + metrics + rate limiting + eval harness
-- [ ] **Feature 9: MCP Integration** - Model Context Protocol for external tools
 
 ### Phase 5: Production (Planned)
-- [ ] **Feature 10: Multimodal AI** - Image/document understanding
-- [ ] **Feature 11: Production Design** - Error handling, monitoring, rate limiting
+- [x] **Feature 11: Production Design** - Structured logging, request tracing, metrics, rate limiting, eval harness
 - [ ] **Feature 12: Containerization** - Docker deployment ready
 
 ## 🏗️ Architecture
