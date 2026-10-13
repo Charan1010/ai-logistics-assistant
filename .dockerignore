@@ -1,0 +1,31 @@
+# Keep secrets, local envs, caches, and persisted data out of the build context.
+
+# Git
+.git
+.gitignore
+
+# Secrets — NEVER ship .env into the image (.env.example is copied explicitly)
+.env
+.env.*
+!.env.example
+
+# Virtualenvs
+venv/
+.venv/
+.venv-1/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Persisted runtime data (lives in a named volume, not the image)
+data/
+
+# Local scratch / docs
+.pr-body-*.md
+*.log

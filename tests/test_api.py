@@ -52,6 +52,13 @@ def test_api_status_endpoint():
     assert "model" in data
 
 
+def test_api_health_endpoint():
+    """Health probe returns 200 with a healthy status and no external deps."""
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
+
+
 @patch("app.llm_client.llm_client.chat", new_callable=AsyncMock)
 def test_chat_endpoint_valid_message(mock_chat):
     """Test chat endpoint with a valid message (mocked LLM)."""
