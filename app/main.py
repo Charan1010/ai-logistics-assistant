@@ -413,6 +413,7 @@ async def status():
         "version": "0.1.0",
         "features": ["basic_chat", "structured_output", "conversation_history", "document_ingestion", "semantic_search", "smart_router", "retrieval_memory", "agent_tools"],
         "model": llm_client.model,
+        "provider": llm_client.provider,
         "multi_tenant": settings.enable_multi_tenant,
         "long_term_context": settings.enable_long_term_context,
     }

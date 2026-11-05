@@ -17,10 +17,12 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
 
-    # Groq
+    # Groq (OpenAI-compatible API)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # Feature 10: Multimodal AI
     vlm_model: str = "llava"                # Ollama VLM: llava | phi3:vision | llava-phi3
