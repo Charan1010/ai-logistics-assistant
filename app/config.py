@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # Groq (OpenAI-compatible API)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "llama-3.3-70b-versatile"
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # Feature 10: Multimodal AI

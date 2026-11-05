@@ -87,6 +87,27 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
+    @staticmethod
+    def _raise_for_status(response: httpx.Response) -> None:
+        """Raise on HTTP error, including the response body in the message.
+
+        Providers like Groq/OpenAI return the real reason (e.g. a decommissioned
+        model) in the JSON body; the default ``raise_for_status`` hides it behind
+        a bare status line. Surfacing the body makes CI/eval failures diagnosable.
+        """
+        if response.is_error:
+            body = ""
+            try:
+                body = response.text[:500]
+            except Exception:
+                body = "<unreadable response body>"
+            raise httpx.HTTPStatusError(
+                f"{response.status_code} {response.reason_phrase} from "
+                f"{response.request.url}: {body}",
+                request=response.request,
+                response=response,
+            )
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
@@ -99,7 +120,7 @@ class LLMClient:
                     headers=self._openai_headers(),
                     json={"model": self.model, "messages": messages},
                 )
-                response.raise_for_status()
+                self._raise_for_status(response)
                 result = response.json()
                 return result["choices"][0]["message"]["content"] or ""
 
@@ -108,7 +129,7 @@ class LLMClient:
                 f"{self.base_url}/api/chat",
                 json={"model": self.model, "messages": messages, "stream": False},
             )
-            response.raise_for_status()
+            self._raise_for_status(response)
             result = response.json()
             return result["message"]["content"]
 
@@ -128,7 +149,7 @@ class LLMClient:
                     headers=self._openai_headers(),
                     json=payload,
                 )
-                response.raise_for_status()
+                self._raise_for_status(response)
                 data = response.json()
 
             message = (data.get("choices") or [{}])[0].get("message", {}) or {}
@@ -154,7 +175,7 @@ class LLMClient:
             payload["tools"] = tools
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(f"{self.base_url}/api/chat", json=payload)
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
 
         message = data.get("message", {}) or {}
@@ -188,7 +209,7 @@ class LLMClient:
                         "response_format": {"type": "json_object"},
                     },
                 )
-                response.raise_for_status()
+                self._raise_for_status(response)
                 result = response.json()
                 return result["choices"][0]["message"]["content"] or ""
 
@@ -203,7 +224,7 @@ class LLMClient:
                     "options": {"temperature": temperature},
                 },
             )
-            response.raise_for_status()
+            self._raise_for_status(response)
             result = response.json()
             return result["message"]["content"]
 

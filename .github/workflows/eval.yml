@@ -60,5 +60,5 @@ jobs:
         run: python tests/run_eval_ci.py
         env:
           LLM_PROVIDER: groq
-          GROQ_MODEL: llama-3.1-8b-instant
+          GROQ_MODEL: llama-3.3-70b-versatile
           EMBEDDINGS_OFFLINE_MODE: "false"
