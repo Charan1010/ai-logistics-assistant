@@ -11,11 +11,21 @@ The public interface (``chat``, ``chat_with_tools``, ``chat_json`` and the
 ``model`` attribute) is identical across providers so the rest of the app and
 the test suite are provider-agnostic.
 """
+import asyncio
 import json
+import logging
 import httpx
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Retry behavior for transient errors (429 rate limits, 5xx). Applies to the
+# OpenAI-compatible providers (Groq/OpenAI) where rapid eval loops can trip
+# free-tier rate limits.
+_MAX_RETRIES = 5
+_BASE_BACKOFF_SECONDS = 2.0
 
 
 @dataclass
@@ -108,6 +118,36 @@ class LLMClient:
                 response=response,
             )
 
+    async def _post_with_retry(self, client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+        """POST with exponential backoff on 429 / 5xx transient errors.
+
+        Honors the ``Retry-After`` header when present (Groq/OpenAI send it on
+        429). Retries only transient statuses; 4xx like 401/404 fail fast since
+        retrying won't help. On the final attempt the response is returned as-is
+        so the caller's ``_raise_for_status`` surfaces the real error body.
+        """
+        transient = {429, 500, 502, 503, 504}
+        for attempt in range(_MAX_RETRIES):
+            response = await client.post(url, **kwargs)
+            if response.status_code not in transient or attempt == _MAX_RETRIES - 1:
+                return response
+
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+            else:
+                delay = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+
+            logger.warning(
+                "LLM request got %s; retrying in %.1fs (attempt %d/%d)",
+                response.status_code, delay, attempt + 1, _MAX_RETRIES,
+            )
+            await asyncio.sleep(delay)
+        return response  # unreachable, but keeps type checkers happy
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
@@ -115,7 +155,7 @@ class LLMClient:
         """Send chat messages and return the assistant's text response."""
         if self._is_openai_compatible:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
+                response = await self._post_with_retry(client,
                     f"{self.base_url}/chat/completions",
                     headers=self._openai_headers(),
                     json={"model": self.model, "messages": messages},
@@ -125,7 +165,7 @@ class LLMClient:
                 return result["choices"][0]["message"]["content"] or ""
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
+            response = await self._post_with_retry(client,
                 f"{self.base_url}/api/chat",
                 json={"model": self.model, "messages": messages, "stream": False},
             )
@@ -144,7 +184,7 @@ class LLMClient:
             if tools:
                 payload["tools"] = tools
             async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
+                response = await self._post_with_retry(client,
                     f"{self.base_url}/chat/completions",
                     headers=self._openai_headers(),
                     json=payload,
@@ -174,7 +214,7 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
         async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(f"{self.base_url}/api/chat", json=payload)
+            response = await self._post_with_retry(client, f"{self.base_url}/api/chat", json=payload)
             self._raise_for_status(response)
             data = response.json()
 
@@ -199,7 +239,7 @@ class LLMClient:
         """Send chat messages in JSON output mode; return the raw JSON string."""
         if self._is_openai_compatible:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
+                response = await self._post_with_retry(client,
                     f"{self.base_url}/chat/completions",
                     headers=self._openai_headers(),
                     json={
@@ -214,7 +254,7 @@ class LLMClient:
                 return result["choices"][0]["message"]["content"] or ""
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
+            response = await self._post_with_retry(client,
                 f"{self.base_url}/api/chat",
                 json={
                     "model": self.model,
