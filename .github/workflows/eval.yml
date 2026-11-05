@@ -1,12 +1,17 @@
 # AI Eval Quality Gate (Feature 12: Ship It)
 #
 # Two checks on every push / PR to main:
-#   1. Smoke tests  — app imports + /api/health responds (fast, no LLM).
-#   2. Eval gate    — golden logistics set must score >= 70% (real LLM calls).
+#   1. Smoke test - app imports + /api/health responds (fast, no LLM).
+#   2. Eval gate  - golden logistics set must score >= 70% (real LLM calls via Groq).
 #
-# The eval step is gated on GROQ_API_KEY so Ollama-only setups still get green
-# CI from smoke tests. Add a free Groq key (console.groq.com) as a repo secret
-# named GROQ_API_KEY to unlock the eval gate.
+# The eval gate is skipped automatically when no GROQ_API_KEY secret is set, so
+# Ollama-only forks still get green CI from the smoke test. Add a free Groq key
+# (console.groq.com) as a repo secret named GROQ_API_KEY to unlock the gate.
+#
+# NOTE: GROQ_API_KEY is declared at JOB level (not step level) on purpose. A
+# step's own `env:` block is NOT visible to that step's `if:` condition, so
+# gating on a step-level env var would make the step always skip. Exposing it at
+# job level lets `if: env.GROQ_API_KEY != ''` actually evaluate.
 
 name: AI Eval Quality Gate
 
@@ -19,6 +24,8 @@ on:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -33,7 +40,7 @@ jobs:
         run: pip install -r requirements.txt
 
       # Structural checks: imports resolve and /api/health returns 200.
-      # No LLM calls — runs regardless of whether a provider key is present.
+      # No LLM calls - runs regardless of whether a provider key is present.
       - name: Smoke test (import + health)
         run: |
           python -c "
@@ -47,12 +54,11 @@ jobs:
           "
 
       # AI quality gate: fails the build if pass rate < 70%.
-      # Skipped automatically when no Groq key is configured.
+      # Runs only when GROQ_API_KEY is configured (Ollama is unavailable on CI runners).
       - name: Eval quality gate (pass rate >= 70%)
         if: env.GROQ_API_KEY != ''
         run: python tests/run_eval_ci.py
         env:
           LLM_PROVIDER: groq
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: llama-3.1-8b-instant
           EMBEDDINGS_OFFLINE_MODE: "false"

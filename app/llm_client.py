@@ -1,6 +1,17 @@
 """
-LLM client for interacting with Ollama.
+Provider-aware LLM client.
+
+Supports two API shapes selected by ``settings.llm_provider``:
+
+* ``ollama``  -> local Ollama server (``/api/chat``).
+* ``groq`` / ``openai`` -> OpenAI-compatible chat completions
+  (``/chat/completions`` with a Bearer token).
+
+The public interface (``chat``, ``chat_with_tools``, ``chat_json`` and the
+``model`` attribute) is identical across providers so the rest of the app and
+the test suite are provider-agnostic.
 """
+import json
 import httpx
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -22,31 +33,80 @@ class LLMResponse:
     tool_calls: List[ToolCall] = field(default_factory=list)
 
 
+# Providers that speak the OpenAI chat-completions dialect.
+_OPENAI_COMPATIBLE = {"groq", "openai"}
+
+
+def _coerce_tool_args(raw_args) -> dict:
+    """Normalise tool-call arguments to a dict.
+
+    Ollama returns a dict; OpenAI/Groq return a JSON-encoded string.
+    """
+    if isinstance(raw_args, dict):
+        return raw_args
+    if isinstance(raw_args, str):
+        try:
+            parsed = json.loads(raw_args) if raw_args else {}
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 class LLMClient:
-    """Client for making requests to Ollama API."""
+    """Client for making chat requests to the configured LLM provider."""
 
     def __init__(self):
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
+        self.provider = (settings.llm_provider or "ollama").lower()
 
+        if self.provider in _OPENAI_COMPATIBLE:
+            if self.provider == "groq":
+                self.base_url = settings.groq_base_url.rstrip("/")
+                self.model = settings.groq_model
+                self.api_key = settings.groq_api_key
+            else:  # openai
+                self.base_url = settings.openai_base_url.rstrip("/")
+                self.model = settings.openai_model
+                self.api_key = settings.openai_api_key
+        else:  # ollama (default)
+            self.provider = "ollama"
+            self.base_url = settings.ollama_base_url.rstrip("/")
+            self.model = settings.ollama_model
+            self.api_key = ""
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+    @property
+    def _is_openai_compatible(self) -> bool:
+        return self.provider in _OPENAI_COMPATIBLE
+
+    def _openai_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
     async def chat(self, messages: List[Dict[str, str]]) -> str:
-        """
-        Send chat messages to Ollama and get response.
+        """Send chat messages and return the assistant's text response."""
+        if self._is_openai_compatible:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._openai_headers(),
+                    json={"model": self.model, "messages": messages},
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result["choices"][0]["message"]["content"] or ""
 
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-
-        Returns:
-            str: Assistant's response text
-        """
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False
-                }
+                json={"model": self.model, "messages": messages, "stream": False},
             )
             response.raise_for_status()
             result = response.json()
@@ -57,19 +117,41 @@ class LLMClient:
         messages: List[Dict],
         tools: Optional[List[dict]] = None,
     ) -> LLMResponse:
-        """
-        Send chat messages with optional tool schemas and return a structured response.
+        """Send chat messages with optional tool schemas; return a structured response."""
+        if self._is_openai_compatible:
+            payload: Dict = {"model": self.model, "messages": messages}
+            if tools:
+                payload["tools"] = tools
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._openai_headers(),
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
 
-        Ollama returns tool_calls under message.tool_calls when the model chooses to call a tool.
-        """
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-        }
+            message = (data.get("choices") or [{}])[0].get("message", {}) or {}
+            content = message.get("content") or ""
+            tool_calls: List[ToolCall] = []
+            for entry in message.get("tool_calls") or []:
+                function = entry.get("function") or {}
+                name = function.get("name")
+                if not name:
+                    continue
+                tool_calls.append(
+                    ToolCall(
+                        name=name,
+                        arguments=_coerce_tool_args(function.get("arguments", {})),
+                        call_id=entry.get("id"),
+                    )
+                )
+            return LLMResponse(content=content, tool_calls=tool_calls)
+
+        # Ollama
+        payload = {"model": self.model, "messages": messages, "stream": False}
         if tools:
             payload["tools"] = tools
-
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(f"{self.base_url}/api/chat", json=payload)
             response.raise_for_status()
@@ -77,33 +159,39 @@ class LLMClient:
 
         message = data.get("message", {}) or {}
         content = message.get("content") or ""
-
-        tool_calls: List[ToolCall] = []
+        tool_calls = []
         for entry in message.get("tool_calls") or []:
             function = entry.get("function") or {}
             name = function.get("name")
             if not name:
                 continue
-            raw_args = function.get("arguments", {}) or {}
-            if isinstance(raw_args, str):
-                try:
-                    import json as _json
-                    raw_args = _json.loads(raw_args) if raw_args else {}
-                except Exception:
-                    raw_args = {}
-            if not isinstance(raw_args, dict):
-                raw_args = {}
-            tool_calls.append(ToolCall(name=name, arguments=raw_args, call_id=entry.get("id")))
-
+            tool_calls.append(
+                ToolCall(
+                    name=name,
+                    arguments=_coerce_tool_args(function.get("arguments", {})),
+                    call_id=entry.get("id"),
+                )
+            )
         return LLMResponse(content=content, tool_calls=tool_calls)
 
     async def chat_json(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
-        """
-        Send chat messages with Ollama's JSON output mode enabled.
+        """Send chat messages in JSON output mode; return the raw JSON string."""
+        if self._is_openai_compatible:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._openai_headers(),
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result["choices"][0]["message"]["content"] or ""
 
-        Ollama's `format: "json"` forces the model to emit valid JSON. Used by the
-        Feature 8 planner where we need a parseable list of steps.
-        """
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{self.base_url}/api/chat",
