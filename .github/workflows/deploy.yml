@@ -7,10 +7,19 @@
 #   with zero manual `docker build` / `docker push`. Anyone (or any server) can
 #   then pull `ghcr.io/<owner>/<repo>:latest` and run it.
 #
-# CD RUNS AFTER CI (not in parallel):
+# CD RUNS AFTER *BOTH* QUALITY GATES (not in parallel):
 #   The `workflow_run` trigger waits for the "CI Pipeline" workflow to finish on
-#   main, and the job only proceeds if CI concluded successfully. So the order is
-#   always:  push → CI (lint + tests + coverage) → [success] → CD (build + push).
+#   main. But CI alone is not enough — the "AI Eval Quality Gate" must ALSO have
+#   passed for the same commit, otherwise we could publish an image whose AI
+#   answer quality has regressed.
+#
+#   GitHub Actions has no native "wait for two workflows": listing both names in
+#   `workflow_run` fires this workflow TWICE (one event per workflow that
+#   completes). So instead we keep the single CI trigger and then explicitly
+#   query the GitHub API for the eval workflow's conclusion on the same commit
+#   SHA (see the `verify-gates` job below).
+#
+#   Effective order:  push → CI + Eval (parallel) → [both pass] → CD (build + push).
 #
 # NO EXTERNAL ACCOUNTS NEEDED:
 #   GHCR is part of GitHub. The built-in GITHUB_TOKEN (with packages: write) is
@@ -32,16 +41,77 @@ on:
 permissions:
   contents: read
   packages: write          # required to push to GHCR
+  actions: read            # required to read the eval workflow's run status
+
+env:
+  EVAL_WORKFLOW_NAME: AI Eval Quality Gate
 
 jobs:
-  build-and-push:
+  # ---------------------------------------------------------------------------
+  # Gate 2: confirm the AI Eval Quality Gate also succeeded for this commit.
+  #
+  # `workflow_run` only tells us CI passed. This job looks up the eval workflow's
+  # run for the SAME commit SHA and fails if it did not succeed, so a quality
+  # regression blocks publishing. For tag / manual runs there is no triggering
+  # commit from CI, so the check is skipped (see the `if` below).
+  # ---------------------------------------------------------------------------
+  verify-gates:
     runs-on: ubuntu-latest
-    # Gate: when triggered by CI completion, only proceed if CI passed.
-    # (push-tag and manual runs don't set workflow_run, so they pass this check.)
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - name: Verify AI Eval Quality Gate passed for this commit
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          echo "Checking '$EVAL_WORKFLOW_NAME' for commit $HEAD_SHA"
+
+          # Poll because CI and the eval gate run in parallel — the eval run may
+          # still be in progress when CI finishes.
+          for attempt in $(seq 1 30); do
+            runs=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
+              --jq "[.workflow_runs[] | select(.name == \"${EVAL_WORKFLOW_NAME}\")]")
+
+            count=$(echo "$runs" | jq 'length')
+            if [ "$count" -eq 0 ]; then
+              echo "::error::No '$EVAL_WORKFLOW_NAME' run found for commit $HEAD_SHA"
+              exit 1
+            fi
+
+            # Most recent run for this SHA.
+            status=$(echo "$runs" | jq -r 'sort_by(.created_at) | last | .status')
+            conclusion=$(echo "$runs" | jq -r 'sort_by(.created_at) | last | .conclusion')
+            echo "attempt ${attempt}/30 — status=${status} conclusion=${conclusion}"
+
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "✅ '$EVAL_WORKFLOW_NAME' passed — proceeding to publish."
+                exit 0
+              fi
+              echo "::error::'$EVAL_WORKFLOW_NAME' concluded '${conclusion}' — refusing to publish."
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          echo "::error::Timed out waiting for '$EVAL_WORKFLOW_NAME' to complete."
+          exit 1
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: verify-gates      # only publish once BOTH gates are green
+    steps:
+      # Check out the exact commit that passed CI + the eval gate. Without this,
+      # a workflow_run-triggered checkout defaults to the branch head, which may
+      # already have newer, unverified commits.
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
