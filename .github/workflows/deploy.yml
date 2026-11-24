@@ -118,17 +118,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Read checked-out commit
+        id: source
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
       # Derives the lowercase image name and a sensible set of tags/labels.
       - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          context: git
+          context: workflow
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
+            type=raw,value=sha-${{ steps.source.outputs.short_sha }},priority=100
             type=ref,event=tag
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
 
       - name: Build candidate image
         id: build
