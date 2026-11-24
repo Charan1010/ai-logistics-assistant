@@ -196,6 +196,9 @@ loads it into Docker on the runner, and starts it by image ID. It checks health,
 the root HTML content type, and the application title before pushing the same
 image under the generated GHCR tags. Failed checks prevent publication; there
 is no second build. Software tests remain in CI.
+Metadata uses the workflow context because exact-commit checkout leaves a
+detached HEAD. The SHA tag and revision label come explicitly from
+`git rev-parse HEAD`, so they identify the checked-out code, not a newer branch tip.
 The smoke check needs no model API keys and does not test JavaScript execution,
 Groq, embeddings, retrieval, or Azure. Actual deployment still needs live checks.
 These changes must be pushed and the publishing workflow executed to verify
