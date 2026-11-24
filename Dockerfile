@@ -33,6 +33,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
 COPY app ./app
+COPY ui ./ui
 COPY tests ./tests
 COPY .env.example ./
 
