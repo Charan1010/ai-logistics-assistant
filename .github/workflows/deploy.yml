@@ -19,7 +19,8 @@
 #   query the GitHub API for the eval workflow's conclusion on the same commit
 #   SHA (see the `verify-gates` job below).
 #
-#   Effective order:  push → CI + Eval (parallel) → [both pass] → CD (build + push).
+#   Normal CI-triggered order: CI + Eval → build once → container smoke → push.
+#   Container checks run on every publishing path, including tag/manual runs.
 #
 # NO EXTERNAL ACCOUNTS NEEDED:
 #   GHCR is part of GitHub. The built-in GITHUB_TOKEN (with packages: write) is
@@ -103,6 +104,7 @@ jobs:
 
   build-and-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: verify-gates      # only publish once BOTH gates are green
     steps:
       # Check out the exact commit that passed CI + the eval gate. Without this,
@@ -116,6 +118,74 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Derives the lowercase image name and a sensible set of tags/labels.
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          context: git
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=ref,event=tag
+
+      - name: Build candidate image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start candidate container
+        id: container
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: docker run --detach --name ai-logistics-smoke --publish 127.0.0.1:8000:8000 "$IMAGE_ID"
+
+      - name: Verify packaged health endpoint and UI
+        run: |
+          python3 - <<'PY'
+          import json
+          import time
+          from urllib.error import URLError
+          from urllib.request import urlopen
+
+          base_url = "http://127.0.0.1:8000"
+          for attempt in range(60):
+              try:
+                  with urlopen(f"{base_url}/api/health", timeout=5) as response:
+                      assert response.status == 200
+                      assert json.load(response).get("status") == "healthy"
+                  break
+              except (URLError, TimeoutError) as exc:
+                  print(f"Waiting for startup ({attempt + 1}/60): {exc}", flush=True)
+                  time.sleep(2)
+          else:
+              raise RuntimeError("Container did not become healthy")
+
+          with urlopen(base_url, timeout=5) as response:
+              assert response.status == 200
+              assert response.headers.get_content_type() == "text/html", "Root did not serve HTML"
+              html = response.read().decode("utf-8")
+              assert "<title>AI Logistics Assistant</title>" in html, "Application UI missing"
+
+          print("Container health and packaged UI checks passed")
+          PY
+
+      - name: Show container logs
+        if: always() && steps.container.outcome == 'success'
+        run: docker logs ai-logistics-smoke
+
+      - name: Remove test container
+        if: always() && steps.container.outcome == 'success'
+        run: docker rm --force ai-logistics-smoke
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -123,34 +193,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Derives the lowercase image name and a sensible set of tags/labels.
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
-            type=ref,event=tag
-
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Push tested image
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          TESTED_IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          test -n "$IMAGE_TAGS"
+          while IFS= read -r tag; do
+            actual_id=$(docker image inspect --format '{{.Id}}' "$tag")
+            if [ "$actual_id" != "$TESTED_IMAGE_ID" ]; then
+              echo "::error::Tag $tag does not reference the tested image"
+              exit 1
+            fi
+          done <<< "$IMAGE_TAGS"
+          while IFS= read -r tag; do
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"
 
       - name: Summary
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          echo "### Image published :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Tested image published :rocket:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Pull with:" >> "$GITHUB_STEP_SUMMARY"
           echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-          echo "docker pull ghcr.io/${{ github.repository }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r tag; do
+            echo "docker pull $tag" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$IMAGE_TAGS"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
